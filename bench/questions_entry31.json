@@ -1,0 +1,116 @@
+{
+  "entry_idx": 31,
+  "titre": "Les points d'eau de mon milieu (naturels et artificiels)",
+  "fiche_no": "#E2-CE1-ESVS-GEO-P2-2026-02-17-003",
+  "context_variants": ["answer", "answer_exercises"],
+  "questions": [
+    {
+      "id": 1,
+      "question": "Selon la fiche, qu'est-ce que la mare de Warang, et pourquoi est-elle considérée comme un point d'eau naturel ?",
+      "type": "recall",
+      "requires_context": "answer",
+      "leak_risk": "LOW",
+      "grounded_in": "answer",
+      "expected_answer": "La mare de Warang est une mare qui se remplit après les pluies ; elle est un point d'eau naturel car elle existe sans intervention humaine directe.",
+      "note": "Nom propre local (Warang) absent de toute connaissance générale ; seule la fiche (champ answer) fournit ce fait, donc le contexte 'answer' est nécessaire et suffisant."
+    },
+    {
+      "id": 2,
+      "question": "Selon la fiche, qu'est-ce que le forage du village de Mbodiène, et pourquoi est-il un point d'eau artificiel ?",
+      "type": "recall",
+      "requires_context": "answer",
+      "leak_risk": "LOW",
+      "grounded_in": "answer",
+      "expected_answer": "C'est un forage creusé pour que tout le village ait accès à l'eau potable ; il est artificiel car il a été creusé/aménagé par l'homme.",
+      "note": "Nom propre local (Mbodiène) très spécifique, non déductible sans la fiche ; discrimine la présence du champ answer."
+    },
+    {
+      "id": 3,
+      "question": "D'après la fiche, quel grand point d'eau naturel est cité comme exemple, connu pour son sel et sa couleur particulière ?",
+      "type": "recall",
+      "requires_context": "answer",
+      "leak_risk": "LOW",
+      "grounded_in": "answer",
+      "expected_answer": "Le Lac Rose.",
+      "note": "Bien que 'Lac Rose' soit un lieu réel au Sénégal, sa mention précise comme exemple de point d'eau naturel dans cette leçon vient du champ answer ; formulation resserrée sur 'sel et couleur unique' pour limiter le risque de fuite par connaissance générale."
+    },
+    {
+      "id": 4,
+      "question": "Quelle est la consigne exacte donnée aux élèves lors de la phase d'évaluation sur l'ardoise, à la fin de cette séance de 30 minutes ?",
+      "type": "recall",
+      "requires_context": "answer",
+      "leak_risk": "LOW",
+      "grounded_in": "answer",
+      "expected_answer": "Dictée de mots ou petites questions sur l'ardoise : « Écris N si c'est naturel, A si c'est artificiel : forage, mare, lac, puits. » (séance de 30 minutes, fiche n° #E2-CE1-ESVS-GEO-P2-2026-02-17-003).",
+      "note": "Formulation littérale de la tâche d'évaluation N/A et métadonnées (durée, code fiche) : uniquement récupérables via le champ answer, faible risque de fuite car très spécifique au document."
+    },
+    {
+      "id": 5,
+      "question": "Dans l'exercice 1 de classification, que répond le corrigé pour « d) Le lac de Guiers » : est-ce un point d'eau naturel (N) ou artificiel (A), et pourquoi ?",
+      "type": "corrige",
+      "requires_context": "exercises",
+      "leak_risk": "LOW",
+      "grounded_in": "exercises",
+      "expected_answer": "N (Naturel) - c'est la nature qui l'a créé.",
+      "note": "Le lac de Guiers n'apparaît nulle part dans le champ answer (seuls Lac Rose, mare de Warang, forage de Mbodiène y figurent) ; la réponse n'existe que dans le corrigé de l'exercice 1, donc la variante A doit échouer et seule la variante B (answer+exercises) permet de répondre correctement."
+    },
+    {
+      "id": 6,
+      "question": "Dans l'exercice 2 (Vrai-Faux), l'affirmation « a) Un fleuve est un point d'eau artificiel car l'homme navigue dessus » est-elle vraie ou fausse selon le corrigé, et quelle justification est donnée ?",
+      "type": "corrige",
+      "requires_context": "exercises",
+      "leak_risk": "LOW",
+      "grounded_in": "exercises",
+      "expected_answer": "FAUX. Un fleuve est un point d'eau naturel ; le fait que l'homme l'utilise (navigation) ne change pas sa nature d'origine.",
+      "note": "Le cas du fleuve et sa justification n'apparaissent que dans le corrigé de l'exercice 2 du champ exercises ; la nuance (usage humain ≠ origine artificielle) n'est pas dans le champ answer, donc seule la variante B permet une réponse correcte et justifiée."
+    },
+    {
+      "id": 7,
+      "question": "Propose un court exercice de classification (naturel/artificiel) que je pourrais donner à mes élèves de CE1 sur l'ardoise, pour vérifier qu'ils distinguent bien les points d'eau naturels et artificiels de leur milieu.",
+      "type": "utility",
+      "requires_context": "answer",
+      "leak_risk": "HIGH",
+      "grounded_in": "answer",
+      "expected_elements": [
+        "Distingue clairement les catégories naturel (N) vs artificiel (A)",
+        "Utilise des exemples locaux du milieu sénégalais (puits, forage, mare, lac, marigot, bassin de rétention)",
+        "Format court et réalisable sur ardoise (dictée de mots, lettres N/A, ou classement de mots)",
+        "Adapté au niveau CE1 (vocabulaire simple, consigne courte)",
+        "Cohérent avec la logique de la fiche : se demander si l'homme a construit/aménagé le point d'eau ou si la nature l'a créé"
+      ],
+      "note": "Le concept (naturel/artificiel, exemples locaux, format ardoise) est disponible dans le champ answer et suffit à une proposition générique correcte. Avec la variante B (exercises), on s'attend à une proposition davantage alignée sur le barème et le format exact des exercices déjà fournis (ex: mêmes items lac de Guiers, bassin pour les fleurs) - d'où leak_risk HIGH : un modèle peut inventer un exercice plausible sans contexte, l'enjeu est la qualité/ancrage, pas le pass/fail."
+    },
+    {
+      "id": 8,
+      "question": "Propose une activité orale de mise en situation (5 minutes) pour introduire la leçon sur les points d'eau naturels et artificiels auprès d'élèves de CE1.",
+      "type": "utility",
+      "requires_context": "answer",
+      "leak_risk": "HIGH",
+      "grounded_in": "answer",
+      "expected_elements": [
+        "Part du vécu quotidien des élèves (chercher de l'eau au village ou à la maison)",
+        "Pose une question ouverte qui fait émerger le vocabulaire des points d'eau (puits, forage, mare, robinet...)",
+        "Prépare la distinction naturel/artificiel qui sera institutionnalisée ensuite",
+        "Durée courte adaptée à l'attention des CE1 (environ 5 minutes)",
+        "Le maître note les réponses au tableau avant de les exploiter"
+      ],
+      "note": "La structure 'mise en situation' de 5 minutes et sa question déclencheuse figurent dans le champ answer, donc une proposition plausible et bien ancrée est possible sans exercises. leak_risk HIGH car une activité orale générique de mise en situation est aussi imaginable sans aucun contexte ; le test porte sur le degré d'ancrage au déroulement réel de la fiche."
+    },
+    {
+      "id": 9,
+      "question": "Propose un petit jeu ou activité de synthèse pour aider mes élèves de CE1 à mémoriser la différence entre points d'eau naturels et artificiels.",
+      "type": "utility",
+      "requires_context": "answer",
+      "leak_risk": "HIGH",
+      "grounded_in": "answer",
+      "expected_elements": [
+        "Renforce la définition simple : naturel = créé par la nature, artificiel = fait/aménagé par l'homme",
+        "Mobilise le matériel évoqué dans la fiche (photos/dessins de mares, lacs, puits, forages, bassins de rétention, ou objets locaux comme la miniature de puits)",
+        "Format ludique et actif (tri d'images, mime, jeu de association mot-image, jeu de cartes N/A)",
+        "Utilise des exemples locaux cités dans la fiche (Lac Rose, mare de Warang, forage de Mbodiène) pour ancrer l'activité dans le milieu réel",
+        "Adapté à la durée et au rythme d'une séance de 30 minutes en CE1"
+      ],
+      "note": "Le concept et les exemples/matériel du jeu proviennent du champ answer. leak_risk HIGH car un jeu de mémorisation générique sur naturel/artificiel reste proposable sans aucun contexte ; ce qui distingue une bonne réponse c'est l'usage des exemples et du matériel spécifiques à la fiche (mieux visibles avec la variante exercises pour aligner le jeu sur le format des évaluations déjà utilisées)."
+    }
+  ]
+}
