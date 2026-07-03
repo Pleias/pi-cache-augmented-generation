@@ -2,8 +2,9 @@
 
 **Status:** design / initial setup
 **Date:** 2026-07-03
-**Model under test:** [Baguettotron (PleIAs) — GGUF](https://huggingface.co/PleIAs/Baguettotron-GGUF)
+**Model under test:** [Baguettotron (PleIAs) — GGUF](https://huggingface.co/PleIAs/Baguettotron-GGUF), Q8_0 (343 MB, ~320M params, `llama` arch). **Reasoning model** — see §5.
 **Runtime:** `llama.cpp` prebuilt (`llama-b9864-bin-ubuntu-x64`, CPU-only) via `llama-server` HTTP API
+**Context window:** 4096 (server `n_ctx`, confirmed via `/props`; model trained at 4000)
 **Dataset:** `extensions_geographie_deuxieme_etape_ce1.json` — 49 CE1 geography teaching fiches (Senegal CEB curriculum, French)
 
 ---
@@ -49,9 +50,10 @@ real target: prefill is painfully slow there, so skipping it (CAG) is where the 
 **Determinism:** `temperature: 0`, fixed `seed`, fixed `n_predict`, so any answer
 difference is a cache effect, not sampling noise.
 
-**Must verify before running:** Baguettotron's trained context window (must exceed
-~4k-token fiche + Q + A), chat template presence (`--jinja` / `--chat-template`), and
-which quant (.gguf) — keep the same quant here and on the Pi for apples-to-apples.
+**Verified (2026-07-03):** context window = 4096 (server `/props`); chat template ships
+in the GGUF and is applied via `--jinja` (ChatML, see §5); quant = Q8_0 (use the same on
+the Pi for apples-to-apples). ⚠️ The model is a **verbose reasoning model** — this breaks
+the naive "fiche + Q + A fits in 4k" assumption. See §5.
 
 ## 3. Why the water-points cluster
 
@@ -105,3 +107,62 @@ stable enough (~3.5k tokens) that its prefill cost is exactly what CAG amortizes
    compare the prefill-time savings — this is the headline result.
 
 Questions for idx 32 live in `bench/questions_entry32.json`.
+
+## 5. Model behavior — probed from the running server (2026-07-03)
+
+Facts pulled from `/props` and a live completion. These change the runner design.
+
+### Chat template (ChatML + forced thinking)
+```
+{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n{% endfor %}
+{% if add_generation_prompt %}<|im_start|>assistant\n<think>\n{% endif %}
+```
+The template **always injects `<think>\n`** at the start of the assistant turn. Baguettotron
+is a **reasoning model**: every response opens with a chain-of-thought, then closes it with
+`</think>`, then emits the final answer.
+
+### Observed output format
+For `"Quelle est la capitale du Sénégal ?"` (max_tokens=200) the returned `content` was pure
+reasoning, in **English**, in a fixed scaffold:
+```
+### 1. Query Parsing
+### 2. Core Facts
+### 3. Contextual Expansion
+### 4. Additional Information
+### 5. Response Structure
+```
+…and it hit `finish_reason: length` **before** emitting `</think>` → **no final answer at all**.
+The real answer only appears *after* `</think>`, which needs more tokens than the reasoning
+consumes.
+
+Consequences for the benchmark:
+1. **`max_tokens` must be large** (reasoning alone > 200 tokens here). `150` captures zero
+   answer. Budget for full CoT + answer, or the run yields only truncated thinking.
+2. **The answer must be parsed out:** split on `</think>`; score only the text *after* it.
+   If `</think>` never appears (truncation), mark the question as "no-answer / truncated",
+   not wrong.
+3. **Language mismatch:** it *reasons* in English even for a French prompt. Check what
+   language the post-`</think>` answer is in before scoring.
+4. Timings object exposes `cache_n` (cached-prefix tokens) alongside `prompt_ms` — use
+   `cache_n` to **verify** the CAG cache is actually being reused (should jump to ~fiche
+   length on cached questions, ~0 on naive).
+
+### ⚠️ Context-budget conflict (the real blocker)
+Window is 4096. Fiche ≈ 3.3k tokens. That leaves only ~700 tokens for **thinking + answer**,
+but the reasoning scaffold alone can exceed that. So the naive plan (full fiche + verbose
+CoT + answer in one 4k window) **does not fit**. Options, to decide before the real run:
+- **Suppress/shorten thinking** — the template hard-codes `<think>`, so this needs a custom
+  `--chat-template` (or a system instruction like "réponds directement, sans raisonnement").
+  Off-distribution risk; must validate answer quality.
+- **Trim the fiche** to only answer-bearing fields, paired with a matching question subset.
+- **RoPE-scale** the context to 6–8k — degrades a model trained at 4k; muddies results.
+
+### ⚠️ Measurement environment
+This host (Xeon 8468, 16 cores) was at **load avg ~17, 23 users** during probing → the server
+was CPU-starved (observed ~1 tok/s decode, ~8 tok/s prefill). **These numbers are contention
+noise, not real performance.** Trust speed numbers only from an idle host or the Pi. Correctness
+(answer format, parsing, quality) is unaffected and can be developed here.
+
+**Runner impact (TODO):** `bench/cag_bench.py` currently takes `message.content` verbatim and
+defaults `max_tokens=150` — both wrong for a reasoning model. Needs: raise `max_tokens`, strip
+the `<think>…</think>` block, detect truncation, and log `cache_n`.

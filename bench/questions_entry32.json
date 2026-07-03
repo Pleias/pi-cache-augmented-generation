@@ -1,0 +1,70 @@
+{
+ "entry_idx": 32,
+ "titre": "Géographie - Découverte des cours d'eau",
+ "fiche_no": "#E2-CE1-ESVS-GEO-P2-2026-02-17-002",
+ "questions": [
+  {
+   "id": 1,
+   "question": "Dans le corrigé de l'Exercice 2 (Localisation sur carte) de cette fiche, à quel cours d'eau correspond le numéro 4 sur la carte simplifiée du Sénégal ?",
+   "expected_answer": "Le Fleuve Casamance.",
+   "grounded_in": "exercises",
+   "type": "corrige",
+   "leak_risk": "LOW",
+   "note": "L'association arbitraire numéro→cours d'eau (1=Océan Atlantique, 2=Fleuve Sénégal, 3=Fleuve Gambie, 4=Casamana) n'existe que dans le corrigé de cette fiche ; aucune connaissance générale ne permet de la deviner."
+  },
+  {
+   "id": 2,
+   "question": "Quel est le numéro (code) de cette fiche pédagogique et quelle est la durée prévue de la séance ?",
+   "expected_answer": "Fiche n° #E2-CE1-ESVS-GEO-P2-2026-02-17-002, durée de 45 minutes.",
+   "grounded_in": "answer",
+   "type": "recall",
+   "leak_risk": "LOW",
+   "note": "Le code de fiche est un identifiant arbitraire propre au document ; impossible à produire sans l'avoir lu."
+  },
+  {
+   "id": 3,
+   "question": "Selon le rappel du cours, quelle différence est faite entre une rivière et un fleuve concernant l'endroit où chacun se jette ?",
+   "expected_answer": "Une rivière est un cours d'eau qui se jette souvent dans un fleuve ou la mer, alors qu'un fleuve est un grand cours d'eau qui se jette dans la mer ou l'océan (ex: le Fleuve Sénégal).",
+   "grounded_in": "answer",
+   "type": "vocab",
+   "leak_risk": "HIGH",
+   "note": "C'est une distinction lexicale française assez classique (programme de géographie primaire) qu'un modèle pourrait connaître sans la fiche ; risque de fuite plus élevé que les autres questions."
+  },
+  {
+   "id": 4,
+   "question": "Dans la SSI 2 « L'aventure de la goutte d'eau », d'où part la goutte d'eau et par quel ordre de cours d'eau passe-t-elle avant d'arriver à l'Océan Atlantique ?",
+   "expected_answer": "Elle tombe du ciel sur une montagne au Fouta, rencontre d'abord un petit ruisseau, puis rejoint une rivière plus grande, puis un immense fleuve, avant d'arriver à l'Océan Atlantique.",
+   "grounded_in": "situations",
+   "type": "application",
+   "leak_risk": "LOW",
+   "note": "Le scénario narratif précis (montagne au Fouta, ordre ruisseau→rivière→fleuve→océan) est une mise en situation inventée pour cette fiche ; non déductible du savoir général."
+  },
+  {
+   "id": 5,
+   "question": "Dans le Vrai-Faux de l'Exercice 3, l'affirmation « Le Fleuve Sénégal coule au sud du pays » est-elle vraie ou fausse selon le corrigé ?",
+   "expected_answer": "Fausse (c) : le Fleuve Sénégal coule au nord du pays, comme rappelé dans les exemples du cours.",
+   "grounded_in": "exercises",
+   "type": "trap",
+   "leak_risk": "HIGH",
+   "note": "C'est un piège testant si le modèle confond ou hallucine sur la localisation, mais un modèle disposant de connaissances géographiques réelles sur le Sénégal pourrait aussi répondre correctement sans la fiche."
+  },
+  {
+   "id": 6,
+   "question": "D'après les critères d'évaluation de la remédiation, combien de cours d'eau du Sénégal (au minimum) un élève en difficulté doit-il être capable de nommer, et lesquels sont cités comme exemples ?",
+   "expected_answer": "Au moins trois cours d'eau : le Fleuve Sénégal, la Gambie et l'Océan Atlantique.",
+   "grounded_in": "situations",
+   "type": "recall",
+   "leak_risk": "LOW",
+   "note": "Le seuil chiffré (« trois ») et la liste exacte des exemples retenus pour ce critère de remédiation sont propres à cette fiche."
+  },
+  {
+   "id": 7,
+   "question": "Quel outil numérique est mentionné dans le matériel de la leçon comme permettant d'accéder à des ressources visuelles sur les cours d'eau sans connexion internet ?",
+   "expected_answer": "L'Ideas Cube.",
+   "grounded_in": "answer",
+   "type": "corrige",
+   "leak_risk": "LOW",
+   "note": "« Ideas Cube » est un nom d'outil spécifique cité dans le matériel numérique optionnel de cette fiche ; ce n'est pas une connaissance générale attendue d'un modèle."
+  }
+ ]
+}
