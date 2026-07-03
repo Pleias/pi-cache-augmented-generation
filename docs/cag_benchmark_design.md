@@ -81,32 +81,59 @@ We ranked all 49 fiches by "requires-the-fiche" strength (topic + `situations` +
 non-derivable, so quality is genuinely context-dependent, while the fiche is large and
 stable enough (~3.5k tokens) that its prefill cost is exactly what CAG amortizes away.
 
-### Chosen starting entries
+### Chosen entry: idx 31 (answer-only sized to fit the reasoning model)
 
-- **idx 32 — "Découverte des cours d'eau"** — headline realistic HIGH case: named
-  Senegal rivers + ocean, map localisation, exercise corrigés. First 7-question set is
-  built here.
-- **(control, optional) idx 43 — school-plan fiche** — different HIGH mechanism: an
-  *invented inline layout* ("1 = Portail … 5 = Toilettes") that exists only in that fiche.
-  Answer is *impossible* without the context → cleanest proof the cache is actually used
-  (no-context mode must fail; CAG must pass). Kept as a control if we want a zero-leak
-  anchor beyond the water cluster.
+Because Baguettotron is a verbose reasoning model in a 4k window (§5), we feed a **trimmed
+fiche**, not the whole entry. We picked **idx 31 — "Les points d'eau de mon milieu
+(naturels et artificiels)"**: smallest `answer` field in the water cluster *and* Sonnet's
+#1 non-common-knowledge entry. Its `answer` field is self-contained and carries strong
+named/local anchors — **Lac Rose, mare de Warang, forage de Mbodiène** — plus naturel/
+artificiel definitions and an embedded eval. Exact tokens (model tokenizer):
+`answer` = 1841, `answer`+`exercises` = 2363 → both leave ≥1.1k tokens for CoT+answer.
+
+### Two context variants (the "does more context help?" axis)
+
+| Variant | Content | ~tok | Purpose |
+|---------|---------|------|---------|
+| `answer` | lesson only | 1841 | baseline context |
+| `answer_exercises` | lesson + exercises-with-corrigés | 2363 | adds the exercise bank |
+
+Cross with the 3 cache modes → 6 cells per question. What each variant proves:
+- **Corrigé questions** (Q5–6, e.g. "Le lac de Guiers — N or A?") are grounded in facts
+  that exist **only in the exercises** field → variant `answer` should **fail**, variant
+  `answer_exercises` should **pass**. A within-benchmark proof that adding context helps.
+- **Teacher-utility questions** (Q7–9, "propose an exercise/activity for concept X") test
+  real teacher value. Scored by a **rubric of expected elements** (uses local examples,
+  ardoise format, N/A structure…), not exact match. Hypothesis: `answer_exercises` yields
+  more grounded, curriculum-aligned proposals than `answer`, and both beat `nocontext`.
+  leak_risk HIGH (generic proposals are possible without context) → the signal is
+  *grounding/quality*, compared A-vs-B, not pass/fail.
+
+Question set: `bench/questions_entry31.json` — 9 questions (4 recall/`answer`,
+2 corrigé/`exercises`, 3 utility), each tagged `requires_context` + `leak_risk`.
+(The earlier idx-32 set, `bench/questions_entry32.json`, is superseded — kept for reference.)
 
 ## 4. Protocol (v0)
 
-1. Start `llama-server` once with Baguettotron + `--slot-save-path` (enables disk KV
-   save/restore for the Pi cold-start scenario).
-2. Load fiche idx 32 as context; save the slot (CAG cache artifact).
-3. For each of the 7 questions, run modes (a)/(b)/(c) with `temperature 0`, fixed seed.
-4. Record per request: `prompt_ms`, `predicted_ms`, token counts, and the answer text.
-5. Score answers against expected answers; drop any question that mode (c) already
-   answers (leaky).
-6. Report: amortization curve (cost vs N questions) for CAG vs naive; quality parity
-   between (a) and (b); leak rate from (c).
-7. Repeat the whole run on the Raspberry Pi (same quant, same fiche, same questions) and
-   compare the prefill-time savings — this is the headline result.
+1. Start `llama-server` once with Baguettotron + `--jinja` + `--slot-save-path`
+   (`./bench/run_server.sh`; disk KV save/restore enables the Pi cold-start scenario).
+2. `uv run bench/cag_bench.py --tokens-only` — confirm both variants fit 4096.
+3. `uv run bench/cag_bench.py` — for each **context variant** (`answer`,
+   `answer_exercises`) × **cache mode** (nocontext/naive/cag) × 9 questions, with
+   `temperature 0`, fixed seed, `max_tokens 512`.
+4. Runner records per request: `prompt_ms` (prefill), `predicted_ms`, `cache_n`
+   (verifies cache reuse), token counts, the `<think>` reasoning, the post-`</think>`
+   answer, and a truncation flag.
+5. Score: recall/corrigé questions vs `expected_answer`; utility questions vs
+   `expected_elements` rubric. Drop any question `nocontext` already answers (leaky).
+6. Report: (a) amortization curve CAG vs naive per variant; (b) corrigé questions —
+   `answer` fails / `answer_exercises` passes (context-value proof); (c) utility grounding
+   A vs B vs nocontext; (d) quality parity between cag and naive (same content → same
+   answer, else cache bug).
+7. Repeat on the Raspberry Pi (same quant/fiche/questions) — prefill-time savings there
+   is the headline result. ⚠️ Ignore speed numbers from the shared x86 host (§5).
 
-Questions for idx 32 live in `bench/questions_entry32.json`.
+Results → `bench/results/entry31_results.json`. Questions → `bench/questions_entry31.json`.
 
 ## 5. Model behavior — probed from the running server (2026-07-03)
 

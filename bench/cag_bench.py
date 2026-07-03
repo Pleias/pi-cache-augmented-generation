@@ -42,14 +42,35 @@ SYSTEM_NOCTX = (
 )
 
 
-def build_fiche(entry: dict) -> str:
-    """The context we feed the model — the answer-bearing fields, no JSON wrapper."""
-    parts = []
-    for k in ("introductory_text", "answer", "situations", "exercises"):
-        v = entry.get(k)
-        if v:
-            parts.append(str(v).strip())
-    return "\n\n".join(parts)
+# Context variants. Baguettotron is a verbose reasoning model in a 4k window, so we
+# feed a trimmed fiche (not the whole entry) to leave room for the <think> block +
+# answer. See docs §5.
+#   answer          : lesson content only (~1.9k tok)
+#   answer_exercises : lesson + exercises-with-corrigés (~2.3k tok). Lets the model
+#                      answer corrigé-lookup questions and propose grounded exercises.
+CONTEXT_VARIANTS = ("answer", "answer_exercises")
+
+
+def build_fiche(entry: dict, variant: str) -> str:
+    ans = str(entry.get("answer", "")).strip()
+    if variant == "answer":
+        return ans
+    if variant == "answer_exercises":
+        ex = str(entry.get("exercises", "")).strip()
+        return ans + ("\n\n" + ex if ex else "")
+    raise ValueError(f"unknown context variant: {variant}")
+
+
+def split_think(raw: str) -> tuple[str, str, bool]:
+    """Reasoning model output = <think>…</think> then the answer. The template opens
+    the think block, so `raw` starts INSIDE it. Returns (reasoning, answer, truncated).
+    truncated=True means </think> never appeared -> ran out of tokens mid-reasoning,
+    no answer produced (score as 'no-answer', not wrong)."""
+    tag = "</think>"
+    if tag in raw:
+        think, answer = raw.split(tag, 1)
+        return think.strip(), answer.strip(), False
+    return raw.strip(), "", True
 
 
 def server_tokenize(client: httpx.Client, base: str, text: str) -> int:
@@ -78,22 +99,28 @@ def ask(client: httpx.Client, base: str, system: str, question: str,
     wall_ms = (time.perf_counter() - t0) * 1000
     r.raise_for_status()
     d = r.json()
-    answer = d["choices"][0]["message"]["content"].strip()
+    raw = d["choices"][0]["message"]["content"] or ""
+    finish = d["choices"][0].get("finish_reason")
+    reasoning, answer, truncated = split_think(raw)  # reasoning model: strip <think>
     t = d.get("timings", {})  # llama.cpp adds this to the OpenAI-compat response
     usage = d.get("usage", {})
     return {
-        "answer": answer,
+        "answer": answer,            # text AFTER </think> — what we score
+        "reasoning": reasoning,      # the <think> block (kept for inspection)
+        "truncated": truncated,      # </think> never emitted -> no answer
+        "finish_reason": finish,
         "prompt_ms": t.get("prompt_ms"),
         "predicted_ms": t.get("predicted_ms"),
         "prompt_n": t.get("prompt_n", usage.get("prompt_tokens")),
         "predicted_n": t.get("predicted_n", usage.get("completion_tokens")),
+        "cache_n": t.get("cache_n"),  # cached-prefix tokens -> verifies CAG reuse
         "wall_ms": round(wall_ms, 1),
     }
 
 
 def run_mode(client, base, mode, fiche, questions, *, max_tokens, seed):
     """Run all questions in one mode, in order. For cag, order matters: Q1 primes
-    the fiche prefix, Q2..N should show prompt_ms collapse."""
+    the fiche prefix, Q2..N should show prompt_ms collapse (and cache_n jump)."""
     system = SYSTEM_NOCTX if mode == "nocontext" else SYSTEM_PROMPT.format(fiche=fiche)
     cache_prompt = (mode == "cag")
     rows = []
@@ -102,49 +129,55 @@ def run_mode(client, base, mode, fiche, questions, *, max_tokens, seed):
                   cache_prompt=cache_prompt, max_tokens=max_tokens, seed=seed)
         res.update({"id": q["id"], "type": q.get("type"),
                     "leak_risk": q.get("leak_risk"),
-                    "expected": q.get("expected_answer")})
+                    "requires_context": q.get("requires_context"),
+                    "expected": q.get("expected_answer"),
+                    "expected_elements": q.get("expected_elements")})
         rows.append(res)
-        pm = res["prompt_ms"]
-        print(f"  [{mode:9}] Q{q['id']} prefill={pm:8.1f}ms "
-              f"({res['prompt_n']} tok)  decode={res['predicted_ms']:.0f}ms "
-              f"-> {res['answer'][:60]!r}")
+        pm = res["prompt_ms"] or 0
+        flag = " [TRUNC:no-answer]" if res["truncated"] else ""
+        shown = res["answer"] or res["reasoning"]
+        print(f"  [{mode:9}] Q{q['id']:<2} prefill={pm:8.1f}ms cache_n={res['cache_n']} "
+              f"decode={res['predicted_ms'] or 0:.0f}ms{flag} -> {shown[:60]!r}")
     return rows
 
 
-def summarize(results: dict):
-    print("\n=== SUMMARY: prefill (prompt_ms) per question ===")
+def summarize(variant: str, results: dict):
+    print(f"\n=== [{variant}] prefill (prompt_ms) per question ===")
     modes = list(results.keys())
     ids = [r["id"] for r in next(iter(results.values()))]
-    hdr = "Q  | " + " | ".join(f"{m:>10}" for m in modes)
+    hdr = "Q   | " + " | ".join(f"{m:>10}" for m in modes)
     print(hdr); print("-" * len(hdr))
     for i, qid in enumerate(ids):
         cells = []
         for m in modes:
             pm = results[m][i]["prompt_ms"]
             cells.append(f"{pm:10.1f}" if pm is not None else f"{'--':>10}")
-        print(f"Q{qid} | " + " | ".join(cells))
-    # amortized totals: what you actually pay for N questions
-    print("\n=== TOTAL prefill ms over all questions (the CAG story) ===")
+        print(f"Q{qid:<3} | " + " | ".join(cells))
+    print(f"--- [{variant}] TOTAL prefill ms over all questions (the CAG story) ---")
     for m in modes:
         tot = sum((r["prompt_ms"] or 0) for r in results[m])
-        print(f"  {m:9}: {tot:9.1f} ms")
+        trunc = sum(1 for r in results[m] if r["truncated"])
+        print(f"  {m:9}: {tot:9.1f} ms   ({trunc}/{len(results[m])} truncated/no-answer)")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8080")
-    ap.add_argument("--entry", type=int, default=32)
-    ap.add_argument("--questions", default=str(ROOT / "bench" / "questions_entry32.json"))
+    ap.add_argument("--entry", type=int, default=31)
+    ap.add_argument("--questions", default=str(ROOT / "bench" / "questions_entry31.json"))
     ap.add_argument("--modes", nargs="+", default=["nocontext", "naive", "cag"],
                     choices=["nocontext", "naive", "cag"])
-    ap.add_argument("--max-tokens", type=int, default=150)
+    ap.add_argument("--context", nargs="+", default=list(CONTEXT_VARIANTS),
+                    choices=CONTEXT_VARIANTS,
+                    help="which context variant(s) to run (default: both)")
+    ap.add_argument("--max-tokens", type=int, default=512,
+                    help="must fit reasoning (<think>) + answer; see docs §5")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--tokens-only", action="store_true",
-                    help="just report exact tokenized length of the fiche and exit")
+                    help="just report exact tokenized length of each variant and exit")
     args = ap.parse_args()
 
     entry = json.loads(DATA.read_text())[args.entry]
-    fiche = build_fiche(entry)
 
     with httpx.Client() as client:
         # sanity: server up?
@@ -154,33 +187,44 @@ def main():
             sys.exit(f"Server not reachable at {args.base} — start it with "
                      f"./bench/run_server.sh  ({e})")
 
-        n_tok = server_tokenize(client, args.base, fiche)
-        print(f"Fiche entry {args.entry}: {len(fiche)} chars = {n_tok} tokens "
-              f"(exact, model tokenizer)")
-        budget = 4000
-        print(f"Context budget check: {n_tok} fiche + ~50 question + {args.max_tokens} "
-              f"answer = {n_tok + 50 + args.max_tokens} / {budget} ctx "
-              f"{'OK' if n_tok + 50 + args.max_tokens <= budget else '!! OVERFLOW — reduce max-tokens or trim fiche'}")
+        budget = 4096
+        fiche_tok = {}
+        for v in args.context:
+            fiche = build_fiche(entry, v)
+            n_tok = server_tokenize(client, args.base, fiche)
+            fiche_tok[v] = n_tok
+            used = n_tok + 50 + args.max_tokens
+            print(f"[{v:16}] {len(fiche)} chars = {n_tok} tok  | "
+                  f"+50 q +{args.max_tokens} gen = {used}/{budget} "
+                  f"{'OK' if used <= budget else '!! OVERFLOW'}")
         if args.tokens_only:
             return
 
         questions = json.loads(Path(args.questions).read_text())["questions"]
         print(f"\nRunning {len(questions)} questions x {len(args.modes)} modes "
-              f"(max_tokens={args.max_tokens}, seed={args.seed})\n")
+              f"x {len(args.context)} context variants "
+              f"(max_tokens={args.max_tokens}, seed={args.seed})")
 
-        results = {}
-        for mode in args.modes:
-            print(f"--- mode: {mode} ---")
-            results[mode] = run_mode(client, args.base, mode, fiche, questions,
-                                     max_tokens=args.max_tokens, seed=args.seed)
+        all_results = {}  # variant -> mode -> rows
+        for v in args.context:
+            fiche = build_fiche(entry, v)
+            print(f"\n########## CONTEXT VARIANT: {v} ##########")
+            per_mode = {}
+            for mode in args.modes:
+                print(f"--- [{v}] mode: {mode} ---")
+                per_mode[mode] = run_mode(client, args.base, mode, fiche, questions,
+                                          max_tokens=args.max_tokens, seed=args.seed)
+            all_results[v] = per_mode
 
-    summarize(results)
+    for v in args.context:
+        summarize(v, all_results[v])
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = RESULTS_DIR / f"entry{args.entry}_results.json"
     out.write_text(json.dumps(
-        {"entry": args.entry, "fiche_tokens": n_tok, "max_tokens": args.max_tokens,
-         "seed": args.seed, "results": results}, ensure_ascii=False, indent=2))
+        {"entry": args.entry, "fiche_tokens": fiche_tok, "max_tokens": args.max_tokens,
+         "seed": args.seed, "context_variants": args.context,
+         "results": all_results}, ensure_ascii=False, indent=2))
     print(f"\nWrote {out}")
 
 
