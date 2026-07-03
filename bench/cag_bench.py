@@ -24,7 +24,7 @@ Usage:
   uv run bench/cag_bench.py --entry 32 --max-tokens 150
 """
 from __future__ import annotations
-import argparse, json, sys, time
+import argparse, json, sys, threading, time
 from pathlib import Path
 import httpx
 
@@ -79,10 +79,18 @@ def server_tokenize(client: httpx.Client, base: str, text: str) -> int:
     return len(r.json().get("tokens", []))
 
 
+def _status(msg: str):
+    """Rewrite a single live status line in place (no newline)."""
+    sys.stdout.write("\r\033[K" + msg)
+    sys.stdout.flush()
+
+
 def ask(client: httpx.Client, base: str, system: str, question: str,
-        *, cache_prompt: bool, max_tokens: int, seed: int) -> dict:
-    """One chat completion. Returns {answer, prompt_ms, predicted_ms, prompt_n,
-    predicted_n, wall_ms}. prompt_ms is the server's prefill time (the CAG metric)."""
+        *, cache_prompt: bool, max_tokens: int, seed: int, label: str = "") -> dict:
+    """One STREAMING chat completion with a live progress line, so a slow box never
+    looks hung. Shows a prefill heartbeat (elapsed seconds until the first token), then
+    a decode counter (tokens + elapsed). Returns answer/reasoning/timings.
+    prompt_ms is the server's prefill time (the CAG metric)."""
     body = {
         "messages": [
             {"role": "system", "content": system},
@@ -91,42 +99,95 @@ def ask(client: httpx.Client, base: str, system: str, question: str,
         "temperature": 0.0,
         "seed": seed,
         "max_tokens": max_tokens,
-        "cache_prompt": cache_prompt,   # llama.cpp extension: reuse matching KV prefix
-        "stream": False,
+        "cache_prompt": cache_prompt,        # llama.cpp: reuse matching KV prefix
+        "stream": True,
+        "stream_options": {"include_usage": True},
     }
     t0 = time.perf_counter()
-    r = client.post(f"{base}/v1/chat/completions", json=body, timeout=600)
+    first = threading.Event()
+
+    # heartbeat: until the first token lands (i.e. during prefill) tick every 1s so the
+    # user sees the box is alive even when prefill takes a minute on a starved CPU.
+    def _heartbeat():
+        while not first.wait(1.0):
+            _status(f"  {label} prefilling… {time.perf_counter()-t0:5.1f}s")
+    hb = threading.Thread(target=_heartbeat, daemon=True)
+    hb.start()
+
+    chunks, timings, usage = [], {}, {}
+    ttft_ms = None
+    ntok = 0
+    finish = None
+    try:
+        with client.stream("POST", f"{base}/v1/chat/completions",
+                            json=body, timeout=600) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    j = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if j.get("timings"):
+                    timings = j["timings"]      # llama.cpp puts this in the final chunk
+                if j.get("usage"):
+                    usage = j["usage"]
+                ch = (j.get("choices") or [{}])[0]
+                finish = ch.get("finish_reason") or finish
+                delta = (ch.get("delta") or {}).get("content")
+                if delta:
+                    if ttft_ms is None:
+                        ttft_ms = (time.perf_counter() - t0) * 1000
+                        first.set()
+                    chunks.append(delta)
+                    ntok += 1
+                    if ntok % 8 == 0:
+                        _status(f"  {label} decoding… {ntok} tok  "
+                                f"{time.perf_counter()-t0:5.1f}s")
+    finally:
+        first.set()
+        hb.join(timeout=1.0)
+        _status("")  # clear the live line
+
     wall_ms = (time.perf_counter() - t0) * 1000
-    r.raise_for_status()
-    d = r.json()
-    raw = d["choices"][0]["message"]["content"] or ""
-    finish = d["choices"][0].get("finish_reason")
+    raw = "".join(chunks)
     reasoning, answer, truncated = split_think(raw)  # reasoning model: strip <think>
-    t = d.get("timings", {})  # llama.cpp adds this to the OpenAI-compat response
-    usage = d.get("usage", {})
     return {
         "answer": answer,            # text AFTER </think> — what we score
         "reasoning": reasoning,      # the <think> block (kept for inspection)
         "truncated": truncated,      # </think> never emitted -> no answer
         "finish_reason": finish,
-        "prompt_ms": t.get("prompt_ms"),
-        "predicted_ms": t.get("predicted_ms"),
-        "prompt_n": t.get("prompt_n", usage.get("prompt_tokens")),
-        "predicted_n": t.get("predicted_n", usage.get("completion_tokens")),
-        "cache_n": t.get("cache_n"),  # cached-prefix tokens -> verifies CAG reuse
+        "prompt_ms": timings.get("prompt_ms"),
+        "predicted_ms": timings.get("predicted_ms"),
+        "prompt_n": timings.get("prompt_n", usage.get("prompt_tokens")),
+        "predicted_n": timings.get("predicted_n", usage.get("completion_tokens")),
+        "cache_n": timings.get("cache_n"),  # cached-prefix tokens -> verifies CAG reuse
+        "ttft_ms": round(ttft_ms, 1) if ttft_ms else None,
         "wall_ms": round(wall_ms, 1),
     }
 
 
-def run_mode(client, base, mode, fiche, questions, *, max_tokens, seed):
+def run_mode(client, base, mode, fiche, questions, *, max_tokens, seed, progress=None):
     """Run all questions in one mode, in order. For cag, order matters: Q1 primes
-    the fiche prefix, Q2..N should show prompt_ms collapse (and cache_n jump)."""
+    the fiche prefix, Q2..N should show prompt_ms collapse (and cache_n jump).
+    `progress` = {"k": int, "total": int} for a global [k/total] counter."""
     system = SYSTEM_NOCTX if mode == "nocontext" else SYSTEM_PROMPT.format(fiche=fiche)
     cache_prompt = (mode == "cag")
     rows = []
     for q in questions:
-        res = ask(client, base, system, q["question"],
-                  cache_prompt=cache_prompt, max_tokens=max_tokens, seed=seed)
+        if progress:
+            progress["k"] += 1
+        gp = f"[{progress['k']}/{progress['total']}] " if progress else ""
+        label = f"{gp}{mode}/Q{q['id']}"
+        # announce BEFORE the (possibly minutes-long) call, so it's never silent
+        print(f"  {label}  {q.get('type','?')} "
+              f"({q.get('question','')[:50]}…) ", flush=True)
+        res = ask(client, base, system, q["question"], cache_prompt=cache_prompt,
+                  max_tokens=max_tokens, seed=seed, label=label)
         res.update({"id": q["id"], "type": q.get("type"),
                     "leak_risk": q.get("leak_risk"),
                     "requires_context": q.get("requires_context"),
@@ -136,8 +197,10 @@ def run_mode(client, base, mode, fiche, questions, *, max_tokens, seed):
         pm = res["prompt_ms"] or 0
         flag = " [TRUNC:no-answer]" if res["truncated"] else ""
         shown = res["answer"] or res["reasoning"]
-        print(f"  [{mode:9}] Q{q['id']:<2} prefill={pm:8.1f}ms cache_n={res['cache_n']} "
-              f"decode={res['predicted_ms'] or 0:.0f}ms{flag} -> {shown[:60]!r}")
+        print(f"    -> prefill={pm:7.1f}ms cache_n={res['cache_n']} "
+              f"decode={res['predicted_ms'] or 0:5.0f}ms/{res['predicted_n']}tok "
+              f"wall={res['wall_ms']/1000:.1f}s{flag}\n       ans: {shown[:80]!r}",
+              flush=True)
     return rows
 
 
@@ -173,6 +236,8 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=512,
                     help="must fit reasoning (<think>) + answer; see docs §5")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--limit", type=int, default=0,
+                    help="cap number of questions (0 = all); handy for a quick smoke test")
     ap.add_argument("--tokens-only", action="store_true",
                     help="just report exact tokenized length of each variant and exit")
     args = ap.parse_args()
@@ -201,9 +266,15 @@ def main():
             return
 
         questions = json.loads(Path(args.questions).read_text())["questions"]
+        if args.limit:
+            questions = questions[:args.limit]
+        total = len(questions) * len(args.modes) * len(args.context)
+        progress = {"k": 0, "total": total}
         print(f"\nRunning {len(questions)} questions x {len(args.modes)} modes "
-              f"x {len(args.context)} context variants "
+              f"x {len(args.context)} context variants = {total} calls "
               f"(max_tokens={args.max_tokens}, seed={args.seed})")
+        print("NOTE: streaming live status shown per call; on a loaded CPU each call "
+              "can take minutes — the prefill/decode heartbeat means it's working.\n")
 
         all_results = {}  # variant -> mode -> rows
         for v in args.context:
@@ -213,7 +284,8 @@ def main():
             for mode in args.modes:
                 print(f"--- [{v}] mode: {mode} ---")
                 per_mode[mode] = run_mode(client, args.base, mode, fiche, questions,
-                                          max_tokens=args.max_tokens, seed=args.seed)
+                                          max_tokens=args.max_tokens, seed=args.seed,
+                                          progress=progress)
             all_results[v] = per_mode
 
     for v in args.context:
