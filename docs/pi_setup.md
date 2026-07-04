@@ -22,6 +22,11 @@ srv  llama_server: listening on http://127.0.0.1:8080
 Same `n_ctx = 4096`, same port `8080` as the x86 host → the Python runner
 (`bench/cag_bench.py`) points at it unchanged (`--base http://<pi>:8080`).
 
+**Measured performance (2026-07-04, dedicated):** prefill **~290 tok/s**, decode **~28 tok/s**.
+Per question ≈ 6.5 s fiche prefill + ~18 s decode. This is the clean, reproducible
+measurement environment — unlike the shared x86 Xeon (load ~55, ~1 tok/s = contention noise).
+Fiche prefill (~6.5 s) is what `cag` mode skips on cached questions.
+
 ## Gotcha already hit
 First launch failed with `failed to open GGUF file ... (No such file or directory)` — the
 path had a stray **curly quote** `’` appended (`...Baguettotron-Q8_0.gguf’`). Copy-paste

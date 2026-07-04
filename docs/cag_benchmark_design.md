@@ -1,7 +1,7 @@
 # CAG Benchmark — Design & Reasoning
 
-**Status:** design / initial setup
-**Date:** 2026-07-03
+**Status:** runner built & verified (x86 plumbing); grounding gate pending on Pi (§6)
+**Date:** 2026-07-03 → updated 2026-07-04
 **Model under test:** [Baguettotron (PleIAs) — GGUF](https://huggingface.co/PleIAs/Baguettotron-GGUF), Q8_0 (343 MB, ~320M params, `llama` arch). **Reasoning model** — see §5.
 **Runtime:** `llama.cpp` prebuilt (`llama-b9864-bin-ubuntu-x64`, CPU-only) via `llama-server` HTTP API
 **Context window:** 4096 (server `n_ctx`, confirmed via `/props`; model trained at 4000)
@@ -118,12 +118,13 @@ Question set: `bench/questions_entry31.json` — 9 questions (4 recall/`answer`,
 1. Start `llama-server` once with Baguettotron + `--jinja` + `--slot-save-path`
    (`./bench/run_server.sh`; disk KV save/restore enables the Pi cold-start scenario).
 2. `uv run bench/cag_bench.py --tokens-only` — confirm both variants fit 4096.
-3. `uv run bench/cag_bench.py` — for each **context variant** (`answer`,
+3. `uv run bench/cag_bench.py [--tag pi]` — for each **context variant** (`answer`,
    `answer_exercises`) × **cache mode** (nocontext/naive/cag) × 9 questions, with
-   `temperature 0`, fixed seed, `max_tokens 512`.
+   `temperature 0`, fixed seed, `max_tokens 1024`.
 4. Runner records per request: `prompt_ms` (prefill), `predicted_ms`, `cache_n`
-   (verifies cache reuse), token counts, the `<think>` reasoning, the post-`</think>`
-   answer, and a truncation flag.
+   (verifies cache reuse), token counts, the reasoning scaffold, the extracted answer,
+   `finish_reason`, and a `truncated` flag (= `finish_reason == "length"`). Rows are
+   streamed to a **tagged JSONL as they complete** (crash-safe; never overwrites).
 5. Score: recall/corrigé questions vs `expected_answer`; utility questions vs
    `expected_elements` rubric. Drop any question `nocontext` already answers (leaky).
 6. Report: (a) amortization curve CAG vs naive per variant; (b) corrigé questions —
@@ -131,9 +132,10 @@ Question set: `bench/questions_entry31.json` — 9 questions (4 recall/`answer`,
    A vs B vs nocontext; (d) quality parity between cag and naive (same content → same
    answer, else cache bug).
 7. Repeat on the Raspberry Pi (same quant/fiche/questions) — prefill-time savings there
-   is the headline result. ⚠️ Ignore speed numbers from the shared x86 host (§5).
+   is the headline result. ⚠️ Ignore speed numbers from the shared x86 host (§5, §6).
 
-Results → `bench/results/entry31_results.json`. Questions → `bench/questions_entry31.json`.
+Results → `bench/results/entry31[_tag]_<timestamp>.{jsonl,json}` (run-tagged, no overwrite).
+Questions → `bench/questions_entry31.json`.
 
 ## 5. Model behavior — probed from the running server (2026-07-03)
 
@@ -145,8 +147,10 @@ Facts pulled from `/props` and a live completion. These change the runner design
 {% if add_generation_prompt %}<|im_start|>assistant\n<think>\n{% endif %}
 ```
 The template **always injects `<think>\n`** at the start of the assistant turn. Baguettotron
-is a **reasoning model**: every response opens with a chain-of-thought, then closes it with
-`</think>`, then emits the final answer.
+is a **reasoning model**: every response opens with a chain-of-thought, then the final answer.
+⚠️ **Correction (see §6):** it turned out the model does **not** emit a closing `</think>`
+tag — the assumption below that we could "split on `</think>`" was wrong. The real parsing
+strategy is in §6.
 
 ### Observed output format
 For `"Quelle est la capitale du Sénégal ?"` (max_tokens=200) the returned `content` was pure
@@ -190,6 +194,50 @@ was CPU-starved (observed ~1 tok/s decode, ~8 tok/s prefill). **These numbers ar
 noise, not real performance.** Trust speed numbers only from an idle host or the Pi. Correctness
 (answer format, parsing, quality) is unaffected and can be developed here.
 
-**Runner impact (TODO):** `bench/cag_bench.py` currently takes `message.content` verbatim and
-defaults `max_tokens=150` — both wrong for a reasoning model. Needs: raise `max_tokens`, strip
-the `<think>…</think>` block, detect truncation, and log `cache_n`.
+**Runner impact:** all handled in the runner as of §6 (streaming, robust answer parsing,
+`finish_reason` truncation, `cache_n`, `max_tokens 1024`, incremental tagged saving).
+
+## 6. Live-run findings & runner fixes (2026-07-04)
+
+First real generations on the **Pi** (dedicated) and a diagnostic on the x86 box. Three
+things surfaced; all now fixed in `bench/cag_bench.py`.
+
+### Pi is fast — the x86 slowness was 100% contention
+Dedicated Pi: **prefill ~290 tok/s, decode ~28 tok/s**. The x86 Xeon was merely oversubscribed
+(load 17→**55**, ~1 tok/s). So: **develop/verify on x86, measure on the Pi.** A tiny prompt
+took 57 s just to prefill on the loaded x86 — unusable for timing, fine for plumbing checks.
+Per-question on the Pi ≈ 6.5 s fiche prefill + ~18 s decode; `cag` skips the ~6.5 s prefill on
+Q2–N. Decode dominates, so the CAG win is the **total prefill ms** row (grows with fiche size).
+
+### Finding 1 — no `</think>` delimiter (parsing was broken)
+The model writes the `### 1..5` English scaffold and then flows **straight into the answer
+with no closing tag**, and the turn-end `<|im_end|>` leaks into `content`. Our `</think>`
+split produced empty answers + false `truncated`. **Fix:** `parse_output()` now
+- judges truncation by `finish_reason == "length"` (not a tag),
+- strips special tokens,
+- extracts the answer as the trailing prose blocks after the scaffold (heuristic), and also
+  honours a separate `reasoning_content` field if a build provides one.
+`max_tokens 1024` is plenty — the model finishes on its own at ~600 tokens (`finish=stop`).
+
+### Finding 2 — the model ignored the fiche and hallucinated (grounding)
+In `naive` mode **with the fiche in context** (`prompt_n=1959`), asked about *la mare de
+Warang* (fiche: "se remplit après les pluies… point d'eau naturel"), it answered **"grande
+rivière du Karnataka, en Inde"** — pure parametric hallucination, and even confabulated a
+fake chat history. Root-cause hypothesis: the fiche was in the **system** role, which a ~320M
+model underweights. **Fix:** fiche moved into the **user** turn (`FICHE:\n…\n\nQUESTION: …`);
+CAG prefix-caching preserved (fiche still a stable prefix). **Open:** must confirm on the Pi
+that this actually stops the hallucination — if not, the model is simply too small to ground
+reliably (a documented finding, then pivot to a larger model).
+
+### Finding 3 — saving was unsafe
+Results were written once at the end to a fixed filename → a killed run lost everything and
+overwrote prior runs. **Fix:** incremental **JSONL** (one flushed line per call) + run-tagged,
+timestamped filenames that never overwrite, plus a combined `.json` at the end.
+
+### Verified on x86 (load 55, plumbing only)
+`--tokens-only` budget/overflow math, arg parsing, live heartbeat, tagged no-overwrite files,
+incremental JSONL, and `finish_reason`-based truncation all confirmed. Answer **quality /
+grounding** could not be checked here (too slow) — that gate runs on the Pi:
+```
+uv run bench/cag_bench.py --limit 1 --modes naive --context answer --tag groundtest
+```
