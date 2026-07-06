@@ -84,8 +84,9 @@ corpus scale is batch-only on a Pi.
 **F5 — Model quality is the ceiling.** Qwen2.5-0.5B: grounded recall OK, but wrong on a
 vrai-faux (Q6), weak corrigé justification, and **fails cross-fiche reasoning** (miscounts,
 hallucinates, denies having the corpus). Qwen2.5-1.5B: **fixes Q4/Q5/Q6**, the "exercises
-help" axis finally discriminates, and **7/8 cross-fiche correct** — only cross-document
-*counting* still fails (cleanly). Cost: ~1.6–2× wall-clock, 2.3× cache.
+help" axis finally discriminates, and **improves on 7/8 cross-fiche questions vs the 0.5B**
+(2/8 fully correct, 5/8 usable) — only cross-document *counting* still hard-fails, and it does
+so cleanly (no loops/hallucination). Cost: ~1.6–2× wall-clock, 2.3× cache.
 
 **F6 — KV cache size is architecture-driven.** Not param count. The *smaller* Baguettotron
 (321M, 80 layers) has a 5× bigger per-token cache than the *larger* Qwen2.5-0.5B (24 layers).
@@ -93,7 +94,51 @@ Qwen3's 8 KV heads make its cache 9× the Qwen2.5-0.5B's. For CAG, few KV heads 
 moderate depth win. KV quantization (`-ctk q8_0 -ctv q8_0`) halves it independently of weight
 quant.
 
+**Quality scorecard** (strictly-correct answers per question type; from the per-question
+outputs in `docs/results_*.md`, §9). Single-fiche counts the **best of the three context
+variants**; corpus is the 8 cross-fiche questions.
+
+| model | test | recall | answer-key | utility | cross-fiche |
+|---|---|:---:|:---:|:---:|:---:|
+| Qwen2.5-0.5B | single-fiche | 3/4 | 1/2 | 1/3 * | — |
+| Qwen2.5-1.5B | single-fiche | 4/4 | 2/2 | 3/3 | — |
+| Qwen2.5-0.5B | corpus (21k) | — | — | — | **1/8** · 1/8 usable |
+| Qwen2.5-1.5B | corpus (21k) | — | — | — | **2/8** · 5/8 usable |
+
+Cross-fiche is scored on two bars: **fully correct** (bold `X/8`, the doc's "Correct" label)
+and **usable** (correct + "Good" — right task, minor gaps). Do **not** confuse this with the
+"7/8" in the source doc and §5 F5: that is an *improved-vs-the-0.5B* count (7 of 8 questions
+behave more sanely on the 1.5B), not 7 correct answers.
+
+Reading the scorecard (the numbers alone undersell the 0.5B→1.5B gap — *how* they fail matters):
+
+- **Single-fiche, best-variant is generous.** No single variant passes everything: the answer-key
+  questions only score once the **`answer+exos`/`full`** context carries the corrigé (F1/F5). On the
+  **0.5B**, answer-key still fails Q6 (vrai-faux negation) in *all* variants — a reasoning limit, not
+  a context one. On the **1.5B** the answer-key axis separates cleanly (right label → right label +
+  correct justification). `*` 0.5B utility: only Q7 has recorded output; Q8–Q9 are undocumented.
+- **Corpus "strict correct" hides the real story.** 1/8 vs 2/8 looks close, but the **failure modes
+  diverge sharply.** 0.5B: partial recall → **repetition loops that eat the token budget** (4/8
+  truncated), plus hallucinated places, a wrong salt/fresh comparison, and one answer that **denies
+  having the corpus**. 1.5B: **no hallucination, no denial, only 1/8 truncated**; the 4 "partial"
+  answers recover real entities and just miss some — the *one* hard failure is **cross-document
+  counting** (Q2: says 2, truth 6), which neither model can do. So the 1.5B is broadly usable at
+  corpus scale where the 0.5B is not, despite the near-identical strict score.
+
 ## 6. Results — timing & tokens (per question, Raspberry Pi)
+
+**Reading the `test` column.** Each name is a context size (its token count is in parentheses).
+The single-fiche tests all use **fiche 31 (water points)** but feed the model progressively more
+of it: **`answer`** (1.9k tok) = only the lesson's answer text; **`answer+exos`** (2.4k) = that
+plus the exercises; **`full`** (3.1k) = the whole fiche (answer + exercises + corrigé/answer key).
+**`corpus`** (21k) is a different, larger context: the whole water cluster (fiches 29–38) cached
+together for the cross-fiche questions. More context = a bigger, slower cache but more material
+the model can ground on, at the cost of ~1.5× cache and decode. The effect on answers is real but
+model-dependent: on **Qwen2.5-1.5B**, adding the exercises (`answer` → `answer+exos`) is the step
+that flips the "do exercises help?" corrigé questions from a right-but-guessed label to a correctly
+*justified* one; going further to `full` adds little (sometimes identical, sometimes a slight
+regression). On the **0.5B** the same extra context does *not* fix the corrigé questions — a model-
+capability limit, not a context one (see §5 F5). Per-question outputs are in `docs/results_*.md` (§9).
 
 **Total wait, without vs with CAG** (naive = re-prefill each query; cag = cache once):
 
@@ -112,34 +157,19 @@ quant.
 
 | model | test | prefill without CAG | prefill with CAG | prefill × | KV cache |
 |---|---|---:|---:|---:|---:|
-| 0.5B | answer | 10.3s | 0.5s | 20× | 22.5 MB |
-| 0.5B | full | 20.4s | 0.8s | 25× | 36.8 MB |
-| 0.5B | corpus | **452.7s** | 6.9s | **65×** | 245 MB |
-| 1.5B | answer | 51.5s | 1.7s | 30× | 52.5 MB |
-| 1.5B | full | 90.3s | 2.7s | 33× | 85.9 MB |
-| 1.5B | corpus | **1,153.9s** | 15.3s | **76×** | 572 MB |
+| 0.5B | answer (1.9k) | 10.3s | 0.5s | 20× | 22.5 MB |
+| 0.5B | full (3.1k) | 20.4s | 0.8s | 25× | 36.8 MB |
+| 0.5B | corpus (21k) | **452.7s** | 6.9s | **65×** | 245 MB |
+| 1.5B | answer (1.9k) | 51.5s | 1.7s | 30× | 52.5 MB |
+| 1.5B | full (3.1k) | 90.3s | 2.7s | 33× | 85.9 MB |
+| 1.5B | corpus (21k) | **1,153.9s** | 15.3s | **76×** | 572 MB |
 
 Reading: output is small (145–341 tok) but decode is slow, so decode dominates *total*;
 prefill is where CAG delivers, and its share grows with input size. Amortized cold-start:
 naive re-prefills the corpus **every** question (8× ≈ 60–150 min); true CAG pays it **once**,
 then near-zero — the more questions per cached context, the bigger the win.
 
-## 7. Practical guidance (which model + context for which use)
-
-- **Interactive teacher lookup (single fiche, short answers):** Qwen2.5-0.5B, ~4–20s/question.
-  Cheapest, grounded, good enough for recall.
-- **Higher-stakes / needs correct corrigé & reasoning:** Qwen2.5-1.5B, ~40–50s/question
-  single-fiche. Worth the ~2× for correctness.
-- **Cross-document / "answer across the whole topic":** cache a **topical cluster** (not the
-  whole 49-fiche corpus) with Qwen2.5-1.5B → ~3.3 min/question, batch/offline. Good for
-  "generate materials overnight," not live chat.
-- **Size the cached working set to the query mix.** Don't cache more context than the
-  questions need — it inflates *both* the cache and decode time. Per-topic clusters beat one
-  giant blob.
-- **Shrink levers when needed:** smaller cluster, lower `max_tokens`, KV quant
-  (`-ctk q8_0 -ctv q8_0`), or (weights) a Q4_K_M quant (~1.5–2× faster, doesn't shrink cache).
-
-## 8. Limitations & caveats
+## 7. Limitations & caveats
 
 - **Cold-start not isolated:** in each run `naive` executed before `cag` and warmed the slot,
   so `cag` Q1 didn't show the true one-time cold prefill (~7.5 min at corpus scale). True cold
@@ -154,11 +184,3 @@ then near-zero — the more questions per cached context, the bigger the win.
 - **Small quality sample:** one fiche / one cluster / a handful of questions per type;
   quality verdicts are indicative, not statistical.
 
-## 9. Detailed experiment docs
-
-- `docs/cag_benchmark_design.md` — design, model behaviour probes, protocol.
-- `docs/pi_setup.md` — Raspberry Pi setup and measured baseline throughput.
-- `docs/results_baguettotron.md` — the query-first / CAG-incompatible negative result.
-- `docs/results_qwen_full.md`, `docs/results_qwen25_1.5b_full.md` — single-fiche, 0.5B & 1.5B.
-- `docs/results_qwen3_1.7b.md`, `docs/results_qwen25_1.5b.md` — model-size / cache trade-offs.
-- `docs/results_corpus_05b.md`, `docs/results_corpus_15b.md` — 21k-token multi-chunk CAG.
