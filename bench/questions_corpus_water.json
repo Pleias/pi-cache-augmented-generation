@@ -1,0 +1,112 @@
+{
+ "corpus": "water",
+ "fiche_indices": [29, 30, 31, 32, 33, 34, 35, 36, 37, 38],
+ "questions": [
+  {
+   "id": 1,
+   "question": "En parcourant l'ENSEMBLE des fiches, dressez la liste de tous les cours d'eau et plans d'eau NOMMÉS par un nom propre (fleuves, rivières, lacs, mares, océan) que l'on trouve dans le corpus. Ne comptez que les noms propres réellement cités, pas les catégories génériques.",
+   "type": "aggregate",
+   "requires_fiches": [30, 31, 32, 33, 37],
+   "leak_risk": "LOW",
+   "expected_elements": [
+    "Le Fleuve Sénégal (cité dans les fiches 30, 32, 33 et 37)",
+    "Le Fleuve Gambie / la Gambie (fiche 32)",
+    "Le Saloum (fiche 32, cité comme autre fleuve important)",
+    "La Casamance (fiche 32, citée comme rivière)",
+    "L'Océan Atlantique (fiches 32, 33, 37)",
+    "Le Lac Rose (fiche 31)",
+    "La mare de Warang (fiche 31)"
+   ],
+   "note": "Aucune fiche ne contient toute la liste : le Fleuve Sénégal et l'Océan Atlantique sont dispersés sur 30/32/33/37, mais Gambie, Saloum et Casamance ne sont nommés que dans la fiche 32, tandis que Lac Rose et mare de Warang ne figurent que dans la fiche 31. Il faut donc agréger plusieurs fiches. (Le Lac de Guiers n'apparaît que dans un exercice, pas dans le contenu de cours, donc il n'est pas attendu.)"
+  },
+  {
+   "id": 2,
+   "question": "Dans combien de fiches du corpus le terme « forage » apparaît-il, et lesquelles ? (donnez les indices)",
+   "type": "count",
+   "requires_fiches": [29, 30, 31, 34, 36, 38],
+   "leak_risk": "LOW",
+   "expected_answer": "Le terme « forage » apparaît dans 6 fiches : les fiches 29, 30, 31, 34, 36 et 38. Il est absent des fiches consacrées aux cours d'eau, à la mer/océan et au ruisseau/rivière (32, 33, 35, 37).",
+   "note": "Pour répondre il faut balayer les dix fiches et compter ; le résultat (6, avec la liste exacte) ne peut être obtenu qu'en lisant tout le corpus."
+  },
+  {
+   "id": 3,
+   "question": "Une seule fiche du corpus introduit la notion de CYCLE DE L'EAU (évaporation, nuages, pluie, ruissellement). Laquelle est-ce, et confirmez que les autres fiches n'abordent pas ce cycle.",
+   "type": "locate",
+   "requires_fiches": [29, 30, 31, 32, 33, 34, 35, 36, 37, 38],
+   "leak_risk": "LOW",
+   "expected_answer": "C'est la fiche 37 (« Découverte des cours d'eau et initiation au cycle de l'eau ») : elle seule décrit le cycle de l'eau simplifié (évaporation, nuages, pluie, ruissellement, retour à la mer). Les mots « cycle de l'eau » et « évaporation » n'apparaissent dans aucune des neuf autres fiches.",
+   "note": "L'affirmation d'unicité (« une seule fiche ») ne peut être vérifiée qu'en confirmant l'absence du cycle dans les 9 autres fiches ; cette question exige donc de lire tout le corpus, pas seulement la fiche 37."
+  },
+  {
+   "id": 4,
+   "question": "Quelles fiches proposent de LOCALISER le Fleuve Sénégal sur la carte du Sénégal, et laquelle d'entre elles y ajoute d'autres cours d'eau du pays (Fleuve Gambie, Saloum, Casamance) ?",
+   "type": "locate",
+   "requires_fiches": [30, 32, 37],
+   "leak_risk": "LOW",
+   "expected_answer": "La localisation du Fleuve Sénégal sur la carte est proposée dans la fiche 30 (« Importance des cours d'eau locaux »), la fiche 32 (« Découverte des cours d'eau ») et la fiche 37 (« ... cycle de l'eau »). C'est la fiche 32 qui va le plus loin en localisant aussi le Fleuve Gambie, la Casamance et l'Océan Atlantique, et en citant le Saloum et la Gambie comme autres fleuves importants.",
+   "note": "Il faut comparer plusieurs fiches qui parlent toutes du Fleuve Sénégal (30, 32, 37) pour identifier laquelle est la plus complète (32) ; une seule fiche ne suffit pas à répondre."
+  },
+  {
+   "id": 5,
+   "question": "Comparez la façon dont la fiche consacrée à la mer et à l'océan et la fiche consacrée au ruisseau et à la rivière présentent l'eau (nature de l'eau, taille, usages, critère de distinction).",
+   "type": "compare",
+   "requires_fiches": [33, 35],
+   "leak_risk": "LOW",
+   "expected_elements": [
+    "Fiche 33 (mer/océan) : eau SALÉE, qu'on ne peut pas boire directement ; étendues immenses (l'océan est encore plus grand que la mer) ; usages liés à la pêche, au transport/commerce (bateaux, marchandises) et au tourisme ; ancrage sur des villes côtières (Dakar, Mbour, Saint-Louis, Gorée, Ngor).",
+    "Fiche 35 (ruisseau/rivière) : eau DOUCE qui COULE ; opposition fondée sur la TAILLE (largeur et profondeur) — le ruisseau est petit, peu profond, souvent temporaire, la rivière est plus grande, plus profonde, permanente, avec pirogues et pêche ; critère principal de distinction = la taille.",
+    "Contraste : la fiche 33 oppose petit/grand par l'immensité et la salinité, la fiche 35 par la taille relative de deux cours d'eau douce ; la mer/océan est une étendue stagnante et salée, le ruisseau/rivière est une eau courante et douce."
+   ],
+   "note": "La question exige explicitement deux fiches distinctes (33 et 35) et une mise en regard de leurs traitements de l'eau ; aucune fiche seule ne contient les deux volets."
+  },
+  {
+   "id": 6,
+   "question": "Le corpus distingue les « points d'eau » et les « cours d'eau ». En vous appuyant sur la fiche dédiée aux points d'eau (puits, forage, mare, bassin de rétention) et sur la fiche dédiée aux cours d'eau (source, ruisseau, rivière, fleuve, mer, océan), expliquez ce qui oppose ces deux familles et donnez les éléments listés dans chacune.",
+   "type": "compare",
+   "requires_fiches": [29, 32],
+   "leak_risk": "LOW",
+   "expected_elements": [
+    "Fiche 29 (points d'eau) : liste puits, forage, mare, bassin de rétention ; un point d'eau est un ENDROIT où l'on TROUVE de l'eau (eau souterraine puisée, ou eau stockée / stagnante).",
+    "Fiche 32 (cours d'eau) : liste source, ruisseau, rivière, fleuve, mer, océan ; un cours d'eau est de l'eau qui S'ÉCOULE / qui bouge, caractérisée par sa taille, son sens d'écoulement, l'endroit où il se jette, eau douce ou salée.",
+    "Opposition clé : point d'eau = eau immobile/qu'on trouve à un endroit (puits, forage, mare) ; cours d'eau = eau en mouvement qui coule (ruisseau → rivière → fleuve → mer/océan)."
+   ],
+   "note": "Les deux définitions et les deux listes complètes se trouvent chacune dans une fiche différente (29 et 32) ; il faut lire les deux pour construire l'opposition."
+  },
+  {
+   "id": 7,
+   "question": "D'après l'ENSEMBLE des fiches, quelles activités humaines dépendent des points d'eau et des cours d'eau au Sénégal ? Dressez la synthèse la plus complète possible.",
+   "type": "synthesis",
+   "requires_fiches": [30, 33, 36, 38],
+   "leak_risk": "LOW",
+   "expected_elements": [
+    "Boire / consommation domestique (fiches 30, 36)",
+    "Cuisiner (fiche 36)",
+    "Se laver, faire la toilette et la lessive (fiches 30, 36)",
+    "Arroser / irriguer les cultures et jardins (fiches 30, 36, 38)",
+    "Abreuver les animaux et le bétail (fiches 30, 36, 38)",
+    "Pêcher / la pêche (fiches 30, 33, 38)",
+    "Transport et commerce par bateaux/pirogues (fiche 33 pour la mer/océan)",
+    "Tourisme (fiche 33)",
+    "Usages festifs et religieux nécessitant beaucoup d'eau : Ndogou, Korité, Tabaski (fiche 36)"
+   ],
+   "note": "Aucune fiche ne réunit toutes ces activités : le transport/commerce et le tourisme viennent de la fiche 33 (mer/océan), l'irrigation et l'abreuvage du bétail des fiches 36 et 38, les usages festifs (Tabaski/Korité/Ndogou) uniquement de la fiche 36, la pêche/culture/transport de la fiche 30. Une vraie synthèse impose de croiser plusieurs fiches."
+  },
+  {
+   "id": 8,
+   "question": "Quelles villes ou localités côtières / sénégalaises sont citées dans le corpus à propos de l'eau (mer, océan, points d'eau), et dans quelle(s) fiche(s) apparaissent-elles ?",
+   "type": "aggregate",
+   "requires_fiches": [32, 33, 36, 37],
+   "leak_risk": "LOW",
+   "expected_elements": [
+    "Dakar (fiches 33 et 37)",
+    "Mbour (fiches 33 et 36)",
+    "Saint-Louis (fiches 32 et 33)",
+    "Ziguinchor (fiche 32)",
+    "Gorée (fiche 33)",
+    "Ngor (fiche 33)",
+    "Rufisque (fiche 33)"
+   ],
+   "note": "La fiche 33 (mer/océan) est la plus riche en villes côtières, mais la liste complète exige d'autres fiches : Ziguinchor et Saint-Louis viennent aussi/uniquement de la fiche 32, Mbour est également cité dans la fiche 36, et Dakar reparaît dans la fiche 37. Il faut donc agréger le corpus."
+  }
+ ]
+}

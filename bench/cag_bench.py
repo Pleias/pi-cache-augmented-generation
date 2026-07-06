@@ -104,6 +104,32 @@ def build_fiche(entry: dict, variant: str) -> str:
     raise ValueError(f"unknown context variant: {variant}")
 
 
+def parse_indices(spec: str) -> list[int]:
+    """Parse a --corpus spec into a sorted list of unique entry indices. Accepts an
+    inclusive range 'a-b' (e.g. '29-38') OR a comma list 'a,b,c' (e.g. '29,31,33')."""
+    spec = spec.strip()
+    if "-" in spec and "," not in spec:
+        a, b = spec.split("-", 1)
+        lo, hi = int(a), int(b)
+        if lo > hi:
+            lo, hi = hi, lo
+        return list(range(lo, hi + 1))
+    return sorted({int(x) for x in spec.split(",") if x.strip() != ""})
+
+
+def build_corpus(entries: list, indices: list[int], field: str = "answer") -> str:
+    """Concatenate several fiches into ONE labeled context. Each fiche is reused via
+    build_fiche(entry, field) so its formatting matches the single-entry path, and gets a
+    header:  === FICHE {n}: {titre} (idx {i}) ===. Fiches are joined by a blank line."""
+    blocks = []
+    for n, i in enumerate(indices, start=1):
+        entry = entries[i]
+        titre = str((entry.get("lesson_meta") or {}).get("titre", "")).strip()
+        body = build_fiche(entry, field)
+        blocks.append(f"=== FICHE {n}: {titre} (idx {i}) ===\n{body}\n")
+    return "\n".join(blocks)
+
+
 _SPECIAL = ("<|im_end|>", "<|im_start|>", "<think>", "</think>", "<|endoftext|>")
 # Baguettotron's CoT uses a fixed markdown scaffold and reasoning glyphs. Trailing prose
 # blocks that contain NONE of these are treated as the final answer.
@@ -477,6 +503,16 @@ def main():
     ap.add_argument("--source-pos", choices=["before", "after"], default="before",
                     help="[baguettotron only] place <source_1> BEFORE the question (CAG "
                          "prefix reuse) or AFTER it (card-faithful RAG format)")
+    ap.add_argument("--corpus", default="",
+                    help="MULTI-FICHE CORPUS mode: concatenate several fiches (by entry "
+                         "index) into ONE big labeled context, cache it once, and answer "
+                         "cross-fiche questions. Accepts an inclusive range '29-38' OR a "
+                         "comma list '29,31,33'. Bypasses --context/--entry; the single "
+                         "context variant is named 'corpus'. Pass a corpus questions file "
+                         "via --questions.")
+    ap.add_argument("--corpus-field", choices=["answer", "full"], default="answer",
+                    help="[corpus only] how much of each fiche to include: 'answer' "
+                         "(lesson content, default) or 'full' (whole fiche).")
     ap.add_argument("--limit", type=int, default=0,
                     help="cap number of questions (0 = all); handy for a quick smoke test")
     ap.add_argument("--tag", default="",
@@ -485,7 +521,18 @@ def main():
                     help="just report exact tokenized length of each variant and exit")
     args = ap.parse_args()
 
-    entry = json.loads(DATA.read_text())[args.entry]
+    data = json.loads(DATA.read_text())
+
+    # MULTI-FICHE CORPUS mode: one big labeled context named "corpus" (bypasses --context/
+    # --entry). Otherwise the usual per-single-entry context variants.
+    corpus_mode = bool(args.corpus)
+    corpus_indices = parse_indices(args.corpus) if corpus_mode else []
+    if corpus_mode:
+        context_texts = {"corpus": build_corpus(data, corpus_indices, args.corpus_field)}
+    else:
+        entry = data[args.entry]
+        context_texts = {v: build_fiche(entry, v) for v in args.context}
+    context_names = list(context_texts.keys())
 
     ctk = {"enable_thinking": False} if args.no_think else None
 
@@ -497,19 +544,27 @@ def main():
             sys.exit(f"Server not reachable at {args.base} — start it with "
                      f"./bench/run_server.sh  ({e})")
 
-        # KV-cache sizing: read the model's dims from its GGUF (path via /props)
+        # KV-cache sizing + real context budget: read from /props once.
+        #   model_path        -> GGUF dims -> KV bytes/token
+        #   default_generation_settings.n_ctx -> the server's REAL context window (the true
+        #   budget). Using it (not a hardcoded 4096) stops big corpora from falsely flagging
+        #   OVERFLOW on a large-window model.
         per_token_bytes = None
+        budget = 4096
         try:
-            mp = client.get(f"{args.base}/props", timeout=5).json().get("model_path")
+            props = client.get(f"{args.base}/props", timeout=5).json()
+            mp = props.get("model_path")
             if mp:
                 per_token_bytes = kv_bytes_per_token(_gguf_kv_dims(mp) or {})
+            n_ctx = (props.get("default_generation_settings") or {}).get("n_ctx")
+            if n_ctx:
+                budget = int(n_ctx)
         except Exception:
             pass
 
-        budget = 4096
         fiche_tok = {}
-        for v in args.context:
-            fiche = build_fiche(entry, v)
+        for v in context_names:
+            fiche = context_texts[v]
             n_tok = server_tokenize(client, args.base, fiche)
             fiche_tok[v] = n_tok
             used = n_tok + 50 + args.max_tokens
@@ -524,10 +579,10 @@ def main():
         questions = json.loads(Path(args.questions).read_text())["questions"]
         if args.limit:
             questions = questions[:args.limit]
-        total = len(questions) * len(args.modes) * len(args.context)
+        total = len(questions) * len(args.modes) * len(context_names)
         progress = {"k": 0, "total": total}
         print(f"\nRunning {len(questions)} questions x {len(args.modes)} modes "
-              f"x {len(args.context)} context variants = {total} calls "
+              f"x {len(context_names)} context variants = {total} calls "
               f"(max_tokens={args.max_tokens}, seed={args.seed})")
         print("NOTE: streaming live status shown per call; on a loaded CPU each call "
               "can take minutes — the prefill/decode heartbeat means it's working.")
@@ -535,7 +590,11 @@ def main():
         # --- run-tagged output, never overwrites; JSONL saved incrementally ---
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         run_ts = time.strftime("%Y%m%d-%H%M%S")
-        stem = f"entry{args.entry}" + (f"_{args.tag}" if args.tag else "") + f"_{run_ts}"
+        if corpus_mode:
+            base_stem = "corpus" + args.corpus.replace(",", "-")
+        else:
+            base_stem = f"entry{args.entry}"
+        stem = base_stem + (f"_{args.tag}" if args.tag else "") + f"_{run_ts}"
         jsonl_path = RESULTS_DIR / f"{stem}.jsonl"
         json_path = RESULTS_DIR / f"{stem}.json"
         meta = {"_meta": True, "entry": args.entry, "tag": args.tag,
@@ -544,8 +603,10 @@ def main():
                 "repeat_penalty": args.repeat_penalty, "top_p": args.top_p,
                 "top_k": args.top_k, "no_think": args.no_think,
                 "source_pos": args.source_pos, "model_format": args.model_format,
-                "modes": args.modes, "context_variants": args.context,
-                "base": args.base, "run_ts": run_ts}
+                "modes": args.modes, "context_variants": context_names,
+                "corpus": bool(corpus_mode), "corpus_indices": corpus_indices,
+                "corpus_field": args.corpus_field if corpus_mode else None,
+                "budget": budget, "base": args.base, "run_ts": run_ts}
         print(f"Saving live to {jsonl_path.name} (crash-safe; tail -f to watch)\n")
 
         all_results = {}  # variant -> mode -> rows
@@ -555,8 +616,8 @@ def main():
             def sink(row):
                 jf.write(json.dumps(row, ensure_ascii=False) + "\n"); jf.flush()
 
-            for v in args.context:
-                fiche = build_fiche(entry, v)
+            for v in context_names:
+                fiche = context_texts[v]
                 print(f"\n########## CONTEXT VARIANT: {v} ##########")
                 per_mode = {}
                 for mode in args.modes:
@@ -572,7 +633,7 @@ def main():
                                               progress=progress, sink=sink)
                 all_results[v] = per_mode
 
-    for v in args.context:
+    for v in context_names:
         summarize(v, all_results[v], per_token_bytes)
 
     json_path.write_text(json.dumps(
