@@ -66,29 +66,25 @@ model reverts to hallucination/confabulation). Verified decisively: same model, 
 ordering changed. → No PleIAs model can combine grounding + CAG. Standard instruct models
 (Qwen) put context in the system message → context-first → CAG works.
 
-**F2 — Prompt format is make-or-break.** Getting Baguettotron to ground at all required its
-exact RAG format (`<source_1>…</source_1>` special tokens, **no** system message, explicit
-`stop` on `<|im_end|>` because it isn't the model's EOS — otherwise it runs on into an
-invented conversation). Wrong framing → hallucination, lesson-plan mimicry, or repetition
-loops. Qwen "just works" with context in the system role.
 
-**F3 — CAG prefill saving is large and grows with context.** 20× at 1.9k tokens → 65–76× at
+
+**F2 — CAG prefill saving is large and grows with context.** 20× at 1.9k tokens → 65–76× at
 21k. `cache_n` = full context every cag call (faithful reuse). See §6.
 
-**F4 — Decode is the residual wall.** CAG does not cache decode. Decode throughput falls as
+**F3 — Decode is the residual wall.** CAG does not cache decode. Decode throughput falls as
 the cached context grows (each token attends over the whole KV): ~15–20 tok/s on a small
 context → **~2.9 tok/s (0.5B) / ~1.2 tok/s (1.5B)** over a 21k-token / 245–572 MB cache. So
 total speedups (1.4–6.8×) trail prefill speedups (20–76×). Single-fiche stays interactive;
 corpus scale is batch-only on a Pi.
 
-**F5 — Model quality is the ceiling.** Qwen2.5-0.5B: grounded recall OK, but wrong on a
+**F4 — Model quality is the ceiling.** Qwen2.5-0.5B: grounded recall OK, but wrong on a
 vrai-faux (Q6), weak corrigé justification, and **fails cross-fiche reasoning** (miscounts,
 hallucinates, denies having the corpus). Qwen2.5-1.5B: **fixes Q4/Q5/Q6**, the "exercises
 help" axis finally discriminates, and **improves on 7/8 cross-fiche questions vs the 0.5B**
 (2/8 fully correct, 5/8 usable) — only cross-document *counting* still hard-fails, and it does
 so cleanly (no loops/hallucination). Cost: ~1.6–2× wall-clock, 2.3× cache.
 
-**F6 — KV cache size is architecture-driven.** Not param count. The *smaller* Baguettotron
+**F5 — KV cache size is architecture-driven.** Not param count. The *smaller* Baguettotron
 (321M, 80 layers) has a 5× bigger per-token cache than the *larger* Qwen2.5-0.5B (24 layers).
 Qwen3's 8 KV heads make its cache 9× the Qwen2.5-0.5B's. For CAG, few KV heads (GQA) +
 moderate depth win. KV quantization (`-ctk q8_0 -ctv q8_0`) halves it independently of weight
