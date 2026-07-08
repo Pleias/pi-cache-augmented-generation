@@ -68,6 +68,11 @@ uv run bench/cag_bench.py --tokens-only
 
 ## Doc map
 
+**README split:** root `README.md` is the PUBLIC variant — explanation + app only, no
+internal links, no repo structure, no benchmark instructions. The full internal version
+(structure, bench quickstart, doc links) is `docs/README_internal.md` — update BOTH when
+the app or findings change.
+
 `docs/TECH_REPORT.md` (primary, §8 = app), `docs/USE_CASES.md` (CAG-vs-RAG argument),
 `docs/throughput.md` (tok/s tables + gotchas), `docs/results/results_*.md` (per-experiment),
 `app/CONTAINER.md` (public container doc — single source, three delivery paths: GHCR

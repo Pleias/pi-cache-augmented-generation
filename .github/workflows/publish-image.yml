@@ -73,6 +73,10 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
+          # No BuildKit provenance attestation: it lands in the index as a third
+          # "unknown/unknown" entry on the GHCR package page (community#45969). For this
+          # demo image the SLSA metadata is not worth the confusing arch listing.
+          provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
