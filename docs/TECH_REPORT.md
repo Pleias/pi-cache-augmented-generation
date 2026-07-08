@@ -211,3 +211,16 @@ to `-1` (auto), which allocated **4 slots** → 4×16,384 unified KV → CPU dec
 whole 65k buffer every token → **0.36 tok/s** (~30× slowdown, observed on x86). Single-user
 CAG must pin `--parallel 1`; the app's entrypoint does.
 
+**Layered persistence (how the app splits durable state).** The KV slot file holds only
+the *document prefix* (saved once at ingest — re-saving a ~300 MB slot after every answer
+would grind the Pi's SD card). The *conversation* is the source of truth in app state and
+is persisted separately as a small `history.json` (atomic write per completed turn, with
+cached per-pair token counts). On restart: slot restore brings back the document KV in
+seconds, the UI replays the conversation instantly, and the first ask re-prefills just the
+history tail on top of the restored prefix. Aborted answers are never committed — absent
+from history, disk, and the next prompt alike. A model change invalidates the persisted
+token accounting, so it drops the conversation and re-prefills the document. The container
+usage doc is baked into the image (`/CONTAINER.md`) and served in-app (`GET /api/doc`,
+"Docs" button) — relevant because the source repo is private while the image is public,
+so the image itself must carry its documentation.
+

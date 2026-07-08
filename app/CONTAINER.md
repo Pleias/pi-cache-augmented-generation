@@ -21,10 +21,18 @@ first ingest prefills and saves the KV slot to `/data/cache`; `docker restart ca
 it with no re-prefill. Multi-turn chat streams over the cached prefix with a capped history
 budget.
 
+**The conversation survives restarts too**: each completed turn is persisted to
+`/data/history.json` next to the cache, replayed in the UI on reload, and re-prefilled as
+the small history tail on top of the restored document prefix. "Clear chat" or ingesting a
+new document starts a fresh conversation; a model change drops the old conversation (its
+token accounting would be stale). This document (`/CONTAINER.md`) is also served in-app —
+the **Docs** button in the header.
+
 ## Volume
 
-Mount a host directory at **`/data`** — it holds your document and the saved KV cache slot.
-The image itself is stateless; everything persistent lives in this volume.
+Mount a host directory at **`/data`** — it holds your document (`fiche.txt` + `meta.json`),
+the saved KV cache slot (`cache/slot0.bin`), and the conversation (`history.json`). The
+image itself is stateless; everything persistent lives in this volume.
 
 ## Platforms & resources
 
