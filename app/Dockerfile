@@ -56,6 +56,10 @@ RUN uv python install 3.12 \
 # App code + launcher.
 COPY server ./server
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# Usage doc baked into the image — the source repo is private, so the GHCR package page
+# can't render the repo README for public users. Read it with:
+#   docker run --rm --entrypoint cat ghcr.io/pleias/cag-app /CONTAINER.md
+COPY CONTAINER.md /CONTAINER.md
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Baked model (from stage 1).

@@ -1,4 +1,5 @@
 # Keep the build context tiny and the image clean.
+*.bak
 .venv/
 **/__pycache__/
 *.py[co]
@@ -9,3 +10,6 @@ data/
 tests/
 smoke.sh
 *.md
+# ...except the usage doc baked into the image (repo is private, package public —
+# /CONTAINER.md is the only full doc reachable by public users).
+!CONTAINER.md

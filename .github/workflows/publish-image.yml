@@ -9,7 +9,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read       # checkout
+  contents: write      # checkout + create the GitHub Release
   packages: write      # push to ghcr.io
 
 jobs:
@@ -37,9 +37,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
+      - name: Extract metadata (tags, labels, annotations)
         id: meta
         uses: docker/metadata-action@v6
+        # DOCKER_METADATA_ANNOTATIONS_LEVELS=manifest,index makes the action emit each OCI
+        # annotation for BOTH the per-arch manifests and the image index. GHCR renders the
+        # package page's description from org.opencontainers.image.description on the INDEX,
+        # so for a multi-arch image the index level is required — a label/manifest-only
+        # annotation would not surface on the package page.
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ghcr.io/${{ github.repository_owner }}/cag-app
           # v1.2.3 -> tags 1.2.3, 1.2, and latest (latest auto-added for
@@ -47,6 +54,15 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+          # org.opencontainers.image.source/url/title/etc. are auto-derived from the repo by
+          # metadata-action. NOTE: this repo is PRIVATE while the package is PUBLIC — the
+          # source label still links the package to the repo, but public visitors cannot see
+          # the repo README on the package page (nor the GitHub Release below). The index-
+          # level description annotation is therefore the ONLY doc public users see on the
+          # package page, so it carries the run command; the full doc is baked into the image
+          # at /CONTAINER.md (see Dockerfile).
+          labels: |
+            org.opencontainers.image.description=Cache-Augmented Generation demo (llama-server + FastAPI + Qwen2.5-1.5B Q4_K_M baked in, no data; amd64/arm64, Raspberry Pi 4 floor). Run: docker run -d -p 8000:8000 -v $HOME/cag-data:/data ghcr.io/pleias/cag-app — open http://localhost:8000, paste a document (<=12k tokens), chat; cache persists across restarts. Full doc inside the image: docker run --rm --entrypoint cat ghcr.io/pleias/cag-app /CONTAINER.md
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -56,5 +72,16 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Publish CONTAINER.md alongside the release so the container usage doc ships with the
+      # tag. The package page itself renders the repo README (via the source label above);
+      # this Release makes the container-specific doc a first-class, downloadable artifact.
+      - name: Create GitHub Release with container doc
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: app/CONTAINER.md
+          files: app/CONTAINER.md
+          fail_on_unmatched_files: true
