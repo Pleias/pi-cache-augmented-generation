@@ -193,18 +193,33 @@ Multi-turn chat on top of the cached prefix, history budget = 16,384 − documen
 oldest pairs dropped. Design spec: `superpowers/specs/2026-07-07-cag-app-design.md`;
 CI publishes `ghcr.io/pleias/cag-app` on `v*` tags.
 
-**New Pi 4 datapoint — Q4_K_M vs the Q8_0 used in the benchmark** (147-token document,
-live smoke suite, all grounding checks passed incl. French + a multi-turn follow-up):
+**New Pi 4 datapoint — Q4_K_M vs the Q8_0 used in the benchmark.** Measured with
+`bench/q4_pi_bench.sh`, which re-runs the §6 single-fiche prompt shapes and context sizes
+against a live Q4_K_M container (greedy, `n_predict 200`, 3 questions/mode). This replaces an
+earlier 147-token smoke that reported a "clean 2×" decode gain — that number was
+**context-flattered** (a near-empty-context Q4 rate compared against a 1.9k-context Q8 rate).
+At *matched* context the multiple is smaller and it *shrinks as context grows*:
 
-| quant (1.5B) | prefill tok/s | decode tok/s |
-|---|---:|---:|
-| Q8_0 (benchmark, §6) | ~38 | ~6.0 |
-| **Q4_K_M (app)** | **44–53** | **12.0** |
+| context | Q8_0 decode (§6) | Q4_K_M decode | Q4/Q8 | Q8_0 prefill | Q4_K_M prefill |
+|---|---:|---:|---:|---:|---:|
+| near-empty | 7.3 | 12.1–12.2 | **1.67×** | ~42 | ~50 |
+| answer (1.9k) | 6.0 | 9.0–9.1 | **1.5×** | 38 | 47 |
+| answer+exos (2.4k) | 5.5 | 8.1–8.4 | 1.49× | 37 | 46 |
+| full (3.1k) | 4.8 | 6.3–6.8 | **1.34×** | 35 | 43 |
 
-Decode doubling under Q4 is the memory-bandwidth thesis confirmed from the other side:
-decode streams the weights every token, Q4 halves the bytes, throughput doubles. At
-~12 tok/s a typical 2–4 sentence answer lands in 3–6 s on a Pi 4 — single-lesson CAG
-tutoring is now comfortably interactive.
+The memory-bandwidth thesis still holds, now quantified honestly. Decode-time memory traffic
+per token is **weights + KV-cache reads**. Q4_K_M halves the *weight* bytes but leaves the KV
+cache unchanged (f16 KV, quant-independent here). So at near-empty context, where decode is
+almost pure weight streaming, halving weights nearly doubles throughput (1.67×); as context
+grows the constant KV-read term dilutes the weight saving (1.5× at 1.9k → 1.34× at 3.1k). The
+data cleanly separates the two terms — decode cost = weight streaming (halved by Q4) + KV
+traffic (untouched) — and the shrinking multiple *is* the KV term becoming a larger share.
+
+At Q4's 9–12 tok/s, a typical 2–4 sentence grounded answer over a cached lesson lands in
+roughly **6–13 s** on a Pi 4 (a full 200-token answer at 1.9k context is 23 s); single-lesson
+CAG tutoring is comfortably interactive. TTFT with a cached prefix is 0.6–1.3 s vs the 42–74 s
+of a fresh re-prefill. **21k corpus context was not measured for Q4** (the app window is
+16,384 tokens). Full raw table + derivation: `docs/throughput.md`.
 
 **Operational gotcha worth recording:** recent llama-server builds default `--parallel`
 to `-1` (auto), which allocated **4 slots** → 4×16,384 unified KV → CPU decode scanned the

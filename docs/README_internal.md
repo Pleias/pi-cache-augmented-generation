@@ -61,9 +61,12 @@ docker run -d --name cag -p 8000:8000 -v "$HOME/cag-data:/data" cag-app
 CONTAINER=cag ./app/smoke.sh
 ```
 
-Measured on a Pi 4 (Q4_K_M): **44–53 tok/s prefill, 12 tok/s decode** — 2× the benchmark's
-Q8_0 decode, because decode is memory-bandwidth-bound and Q4 halves the weight bytes.
-A grounded answer over a cached document lands in a few seconds. Design spec:
+Measured on a Pi 4 (Q4_K_M): **43–50 tok/s prefill, 9–12 tok/s decode** (by context size) —
+**~1.3–1.7× the benchmark's Q8_0 decode** at matched context, not the 2× an earlier
+context-flattered smoke suggested. Decode is memory-bandwidth-bound and Q4 halves the *weight*
+bytes, but decode also reads the quant-independent KV cache, so the gain shrinks as context
+grows (1.67× near-empty → 1.5× at 1.9k → 1.34× at 3.1k). A grounded answer over a cached
+document lands in a handful of seconds. Design spec:
 [`docs/superpowers/specs/2026-07-07-cag-app-design.md`](docs/superpowers/specs/2026-07-07-cag-app-design.md);
 new numbers + operational notes: [`docs/TECH_REPORT.md`](docs/TECH_REPORT.md) §8.
 

@@ -221,25 +221,93 @@ indicative, not comparable in sample size to the Qwen2.5 rows.
 
 ---
 
-## Example-app datapoint — Qwen2.5-1.5B **Q4_K_M** (Pi 4, 2026-07-08)
+## Qwen2.5-1.5B **Q4_K_M** — measured on Pi 4 (2026-07-08)
 
-All benchmark rows above use Q8_0 weights. The packaged app (`app/`) ships **Q4_K_M**;
-its live smoke run on a Pi 4 (147-token document, `llama-server` `print_timing`, n=4
-requests) gives:
+All benchmark rows above use Q8_0 weights. The packaged app (`app/`) ships **Q4_K_M**. To
+compare quants at *matched* context (an earlier 147-token smoke was context-flattered — see
+the note below), `bench/q4_pi_bench.sh` re-runs the same ChatML prompt shapes and context
+sizes as the Q8_0 single-fiche benchmark against a live Q4_K_M container on the Pi 4: greedy,
+`n_predict 200`, 3 questions per mode, in `nocontext` / `naive` / `cag` variants.
 
-| Model | Context (tok) | Mode | Prefill tok/s | Decode tok/s | Basis |
-|---|---:|---|---:|---:|---|
-| Qwen2.5-1.5B **Q4_K_M** | 147 | ingest prefill | 53.4 | — | single smoke run |
-| Qwen2.5-1.5B **Q4_K_M** | ~150–260 (cached) | cag ask ×3 | 44–47 (new tokens only*) | **12.0–12.4** | single smoke run |
+Raw per-run figures (verbatim source for the summary below):
 
-`*` same caveat as the `cag` rows above — only the new question/history tokens are
-prefilled; the document prefix is reused from cache.
+| ctx target | mode | prompt_n | prefill | pf tok/s | out | dec tok/s | total |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 1956 | nocontext | 16 | 0.3s | 49.1 | 49 | 12.08 | 4.4s |
+| 1956 | naive | 1968 | 41.6s | 47.3 | 50 | 9.14 | 47.1s |
+| 1956 | naive | 1978 | 42.2s | 46.9 | 99 | 9.05 | 53.1s |
+| 1956 | naive | 1978 | 42.4s | 46.7 | 200 | 9.01 | 64.6s |
+| 1956 | cag | 16 | 0.6s | 28.4* | 50 | 8.97 | 6.1s |
+| 1956 | cag | 23 | 0.8s | 27.6* | 98 | 9.08 | 11.6s |
+| 1956 | cag | 23 | 0.8s | 27.7* | 200 | 9.01 | 23.0s |
+| 2455 | nocontext | 16 | 0.3s | 50.5 | 49 | 12.15 | 4.3s |
+| 2455 | naive | 2473 | 54.1s | 45.7 | 54 | 8.39 | 60.5s |
+| 2455 | naive | 2483 | 54.5s | 45.6 | 98 | 8.28 | 66.3s |
+| 2455 | naive | 2483 | 54.4s | 45.6 | 86 | 8.37 | 64.7s |
+| 2455 | cag | 16 | 0.7s | 22.6* | 55 | 8.28 | 7.3s |
+| 2455 | cag | 23 | 1.0s | 22.1* | 98 | 8.33 | 12.8s |
+| 2455 | cag | 23 | 1.0s | 22.0* | 200 | 8.14 | 25.6s |
+| 3180 | nocontext | 16 | 0.3s | 50.2 | 49 | 12.24 | 4.3s |
+| 3180 | naive | 3201 | 73.9s | 43.3 | 47 | 6.76 | 80.9s |
+| 3180 | naive | 3211 | 74.2s | 43.3 | 91 | 6.33 | 88.6s |
+| 3180 | naive | 3211 | 73.8s | 43.5 | 200 | 6.42 | 105.0s |
+| 3180 | cag | 16 | 0.9s | 18.4* | 36 | 6.81 | 6.2s |
+| 3180 | cag | 23 | 1.3s | 17.9* | 98 | 6.53 | 16.3s |
+| 3180 | cag | 23 | 1.3s | 17.7* | 200 | 6.44 | 32.3s |
 
-**Q4 vs Q8 decode: 12.0 vs 6.0 tok/s — a clean 2×.** Decode is memory-bandwidth-bound
-(the model streams all weight bytes per generated token); Q4_K_M halves the bytes vs
-Q8_0, so decode doubles. Context here is small (~150–260 tok vs 1.9k in the benchmark
-rows), which flatters it slightly, but the near-empty-context Q8 ceiling was 7.3 tok/s —
-Q4's 12 tok/s clears it by 1.6×, so most of the gain is quantization, not context size.
+`*` = same artifact as the `cag` rows in the master table above: `cag` "pf tok/s" divides
+the tiny re-prefilled `prompt_n` (the new question only, ~16–23 tok) by its prefill ms; it is
+**not** the model's real prefill throughput, because the whole ~1.9–3.2k document prefix is
+reused from cache and never re-prefilled. The real prefill rate is the `naive` row at the same
+context (43–50 tok/s). The `cag` speedup shows up in **TTFT** (prefill column): 0.6–1.3s vs
+the `naive` 42–74s.
+
+**Summary (Q4_K_M, per context size):**
+
+| ctx | naive prefill tok/s | naive TTFT | cag TTFT | decode tok/s |
+|---|---:|---:|---:|---:|
+| ~1.9k | 46.7–47.3 | 41.6–42.4s | 0.6–0.8s | 9.0–9.1 |
+| ~2.4k | 45.6–45.7 | 54.1–54.5s | 0.7–1.0s | 8.1–8.4 |
+| ~3.2k | 43.3–43.5 | 73.8–74.2s | 0.9–1.3s | 6.3–6.8 |
+| near-empty (16 tok) | ~50 | 0.3s | — | 12.1–12.2 |
+
+At these decode rates a full-length CAG answer (document already cached) lands in
+**6.1s (50 tok) → 23.0s (200 tok)** at ~1.9k context, rising to **6.2 → 32.3s** at ~3.2k —
+still well under the 35–45s of re-retrieve-and-re-prefill RAG, and every follow-up skips the
+document prefill entirely. **21k corpus context was not measured for Q4** (the app's window is
+16,384 tokens); where a 21k Q4 figure would be wanted, treat it as not measured.
+
+### Q4_K_M vs Q8_0 at matched context — decode does *not* simply double
+
+Comparing the Q4 rows above to the Q8_0 `naive` rows earlier in this doc, at the *same*
+context size:
+
+| ctx | Q8_0 decode | Q4_K_M decode | Q4/Q8 | Q8_0 naive prefill | Q4 naive prefill | Q4/Q8 |
+|---|---:|---:|---:|---:|---:|---:|
+| near-empty | 7.3 | 12.1–12.2 | **1.67×** | ~42 | ~50 | 1.19× |
+| ~1.9k | 6.0 | 9.0–9.1 | **1.5×** | 38.0 | 47.1 | 1.24× |
+| ~2.4k | 5.5 | 8.1–8.4 | ~1.49× | 36.8 | 45.6 | 1.24× |
+| ~3.2k | 4.8 | 6.3–6.8 | **1.34×** | 35.2 | 43.4 | 1.23× |
+
+And TTFT (naive vs cag), Q8 → Q4:
+- naive @1.9k: 51.5s → 42.1s; @3.2k: 90.3s → 74.0s.
+- cag @1.9k: 1.7s → 0.7s; @3.2k: 2.8s → 1.2s.
+
+**Why the decode gain shrinks as context grows — and why that's the interesting result.**
+An earlier 147-token smoke reported "Q4 decode 12.0 vs Q8 6.0 tok/s, a clean 2×." That number
+was **context-flattered**: 12 tok/s is the near-empty-context rate, compared against a 1.9k-context
+Q8 rate. At matched context the multiple is **1.34–1.67×**, not 2×. The memory-bandwidth thesis
+still holds — it is just now quantified honestly. Decode-time memory traffic per token is
+**weights + KV cache reads**. Q4_K_M halves the *weight* bytes but leaves the KV cache
+unchanged (same f16 KV, quant-independent here). So:
+- At near-empty context the KV term is negligible → decode is almost pure weight streaming →
+  halving weights gets close to 2× (measured 1.67×).
+- As context grows the constant KV-read term grows and dilutes the weight saving → 1.5× at 1.9k,
+  1.34× at 3.2k.
+
+The data cleanly separates the two terms: decode cost = weight streaming (halved by Q4) + KV
+traffic (untouched by Q4), and the shrinking multiple as context grows is exactly the KV term
+becoming a larger share. Bench script: `bench/q4_pi_bench.sh`.
 
 **Gotcha — `--parallel` auto default.** Recent llama-server builds default `-np -1`
 (auto): on the x86 test box it allocated **n_slots = 4** → 4×16,384 unified KV → CPU

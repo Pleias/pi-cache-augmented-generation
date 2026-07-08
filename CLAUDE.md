@@ -72,8 +72,10 @@ uv run bench/cag_bench.py --tokens-only
 
 ## Perf facts to not re-derive (Pi 4, measured)
 
-- Prefill is compute-bound (~44–53 tok/s @1.5B Q4); decode is memory-bandwidth-bound
-  (~12 tok/s @Q4, 6 @Q8 — weight quant halves bytes → doubles decode).
+- Prefill is compute-bound (~43–50 tok/s @1.5B Q4); decode is memory-bandwidth-bound
+  (9–12 tok/s @Q4 by context, vs 6 @Q8 at 1.9k — weight quant halves *weight* bytes, so decode
+  gain is ~1.5× at 1.9k, not 2×; it shrinks to 1.34× at 3.1k and rises to 1.67× near-empty
+  because the quant-independent KV read dilutes the weight saving as context grows).
 - Flash-attention / KV-quant tuning does **not** help decode on Pi CPU (tested, issue #1).
 - Decode falls with cached context size (1.2 tok/s @21k ctx @1.5B Q8) — big corpora are
   batch-only; the interactive unit is one lesson (~2–3k tok).

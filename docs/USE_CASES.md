@@ -33,9 +33,11 @@ That is the **corpus extreme** — 10 lessons / 21k tokens cached at once. Two a
    appears when you deliberately cache ten lessons together.
 2. That 2 min is **mostly decode**, a memory-bandwidth-bound, per-answer cost you also pay
    in RAG. Server-flag tuning (flash-attention, KV-quant) was tested and does **not** help on
-   the Pi CPU (issue #1, closed) — what *does* help is weight quantization: **Q4_K_M doubles
-   decode vs Q8_0** (6 → 12 tok/s measured; TECH_REPORT §8), because decode streams the
-   weight bytes every token.
+   the Pi CPU (issue #1, closed) — what *does* help is weight quantization: **Q4_K_M lifts
+   decode ~1.3–1.7× over Q8_0** (measured at matched context: 6.0 → 9.0 tok/s at 1.9k, 4.8 →
+   6.5 at 3.1k, 7.3 → 12.2 near-empty; TECH_REPORT §8), because decode streams the weight
+   bytes every token and Q4 halves them. (An earlier "doubles / 6 → 12" claim was
+   context-flattered — 12 tok/s is the near-empty rate, not the 1.9k-context rate.)
 
 **"We already have RAG on a Pi with Baguettotron at 35–45s per query."**
 Yes — **per query, every query** (re-retrieve + re-prefill each time). CAG's edge is
@@ -53,10 +55,11 @@ Qwen2.5-1.5B clears that ceiling. So CAG-on-device is not re-doing factoid looku
 | Qwen2.5-1.5B (Q8_0) | 1 lesson (~2–3k tok) | **~40–50s** | 35–45s |
 
 **Update (2026-07-08, packaged app):** the shipped app uses the 1.5B at **Q4_K_M**, which
-doubles decode (6 → **12 tok/s**, measured live on a Pi 4 — decode is memory-bandwidth-bound
-and Q4 halves the weight bytes; TECH_REPORT §8). A typical 2–4 sentence grounded answer now
-lands in **~3–6s** after a cached prefix — the Q8_0 numbers above are the conservative floor,
-and the 1.5B row's "~40–50s" halves in practice.
+lifts decode ~1.3–1.7× over Q8_0 (measured live on a Pi 4 at matched context: 9.0 tok/s at
+1.9k, 6.5 at 3.1k, 12.2 near-empty — decode is memory-bandwidth-bound and Q4 halves the weight
+bytes; TECH_REPORT §8). With the document already cached, a short 2–4 sentence answer lands in
+**~6–13s** and a full 200-token answer in **~23s** at 1.9k context (TTFT just 0.6–1.3s vs the
+42–74s of a fresh re-prefill). The Q8_0 numbers above are the conservative floor.
 
 Single-lesson CAG is now clearly *faster* than the existing 35–45s RAG — and unlocks
 multi-turn follow-ups at near-zero added prefill. The "2 min" only applies to the 10-lesson

@@ -29,8 +29,11 @@ the same cached document.
 - **Decode is the residual wall.** CAG doesn't cache generation, and generation speed is
   memory-bandwidth-bound: it falls as the cached context grows. Interactive use favors
   one lesson-sized context (~2–3k tokens) over big concatenated corpora.
-- **Weight quantization doubles decode.** Q4 weights halve the bytes streamed per
-  generated token vs Q8: measured 6 → 12 tokens/s on the same 1.5B model, same device.
+- **Weight quantization lifts decode ~1.3–1.7×.** Q4 weights halve the bytes streamed per
+  generated token vs Q8. Measured at matched context on the same 1.5B model and device:
+  6.0 → 9.0 tokens/s at ~1.9k context, 4.8 → 6.5 at ~3.1k, 7.3 → 12.2 near-empty. The gain
+  shrinks as context grows because decode also reads the (quant-independent) KV cache, which
+  dilutes the weight saving.
 - **A 1.5B model is the sweet spot.** It fixes the reasoning failures of a 0.5B (negation,
   answer-key justification, cross-document questions) at ~1.6–2× the wall-clock.
 - **KV cache size is architecture-driven, not parameter-count-driven.** Few KV heads
@@ -78,9 +81,9 @@ Built-in documentation is available behind the **Docs** button in the app header
 docker run --rm --entrypoint cat ghcr.io/pleias/cag-app:latest /CONTAINER.md
 ```
 
-**Measured on a Raspberry Pi 4** (Q4_K_M, single lesson-sized document): ~44–53 tokens/s
-prefill, **~12 tokens/s generation** — a typical short grounded answer lands in a few
-seconds, and every follow-up skips the document prefill entirely.
+**Measured on a Raspberry Pi 4** (Q4_K_M, single lesson-sized document): ~43–50 tokens/s
+prefill, **9–12 tokens/s generation** depending on context size — a typical short grounded
+answer lands in a handful of seconds, and every follow-up skips the document prefill entirely.
 
 Resource floor: ~2 GB peak RSS → a 4 GB Pi 4 works (enable swap); 8 GB is comfortable.
 
