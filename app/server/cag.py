@@ -294,3 +294,49 @@ def save_meta(data_dir: Path, fiche_tokens: int, model_id: str) -> Meta:
                 created=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     (data_dir / "meta.json").write_text(meta.to_json(), encoding="utf-8")
     return meta
+
+
+# --- chat-history persistence -----------------------------------------------------------
+# The chat history lives in the KV cache as part of the reused prefix, but the slot file
+# only ever holds the fiche prefix (saved once at ingest — re-saving a ~300 MB slot after
+# every answer would grind the Pi's SD card for marginal gain). So the history is persisted
+# as a small JSON file instead: on restart the fiche KV is restored from the slot and the
+# first /ask re-prefills just the history tail on top of it (seconds, not the ~5-min fiche
+# prefill), while the UI can replay the conversation immediately.
+
+def save_history(data_dir: Path,
+                 history: list[tuple[str, str]], pair_tokens: list[int]) -> None:
+    """Persist the chat turns + their cached token counts next to the slot file.
+
+    Written atomically (tmp + rename) so a crash mid-write can't leave a torn file that
+    would make the next startup drop the whole conversation.
+    """
+    turns = [{"user": u, "assistant": a, "tokens": t}
+             for (u, a), t in zip(history, pair_tokens)]
+    path = data_dir / "history.json"
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"turns": turns}, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def load_history(data_dir: Path) -> tuple[list[tuple[str, str]], list[int]]:
+    """Load persisted chat turns; a missing or corrupt file is an empty conversation."""
+    path = data_dir / "history.json"
+    if not path.exists():
+        return [], []
+    try:
+        turns = json.loads(path.read_text(encoding="utf-8"))["turns"]
+        history = [(str(t["user"]), str(t["assistant"])) for t in turns]
+        pair_tokens = [int(t["tokens"]) for t in turns]
+        # A tampered/garbage count would poison the budget math (negative counts make
+        # trim_history think there is infinite room). Treat it as a corrupt file.
+        if any(t <= 0 or t > N_CTX for t in pair_tokens):
+            return [], []
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return [], []
+    return history, pair_tokens
+
+
+def clear_history(data_dir: Path) -> None:
+    """Remove the persisted conversation (reset / re-ingest)."""
+    (data_dir / "history.json").unlink(missing_ok=True)

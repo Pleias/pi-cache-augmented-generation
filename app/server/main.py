@@ -22,6 +22,11 @@ from . import cag
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080")
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+# Usage doc baked into the image at / by the Dockerfile; when running from a checkout
+# (tests, local dev) fall back to the copy next to the Dockerfile.
+DOC_PATH = Path(os.environ.get("DOC_PATH",
+                               "/CONTAINER.md" if Path("/CONTAINER.md").exists()
+                               else str(Path(__file__).resolve().parents[1] / "CONTAINER.md")))
 
 # llama-server runs a single KV slot (slot 0) and this process holds one shared history.
 # Serialize every /ask and /ingest so two browser tabs, a reload mid-answer, or a double
@@ -80,8 +85,24 @@ async def lifespan(app: FastAPI):
             state.fiche_tokens = self_tokens
             state.ingested = True
             state.restored = ok
+            # The conversation is persisted separately from the slot file (see cag.py):
+            # reload it so the UI can replay it and the next /ask keeps its context. Its
+            # KV is not in the restored slot (fiche prefix only) — the first /ask
+            # re-prefills the history tail, which is small.
+            #
+            # Only on a genuine restore, though: restored=False means the fiche was just
+            # RE-prefilled (model changed / meta corrupt), so the persisted pair token
+            # counts came from a different tokenizer — replaying them could overflow the
+            # budget math. A changed model is a new conversation: drop it.
+            if ok:
+                state.history, state.pair_tokens = cag.load_history(DATA_DIR)
+                state._history_tokens = sum(state.pair_tokens)
+            else:
+                await anyio.to_thread.run_sync(cag.clear_history, DATA_DIR)
+                print("[startup] fiche re-prefilled (model changed or meta invalid); "
+                      "dropping persisted chat history", flush=True)
             print(f"[startup] ingest loaded: {self_tokens} prefix tokens, "
-                  f"restored={ok}", flush=True)
+                  f"restored={ok}, history turns={len(state.history)}", flush=True)
         else:
             print("[startup] no prior ingest found", flush=True)
         yield
@@ -163,6 +184,8 @@ async def ingest(request: Request) -> JSONResponse:
         # Writes go through a worker thread: slow SD I/O must not block the event loop.
         await anyio.to_thread.run_sync(_write_text, DATA_DIR / "fiche.txt", text)
         await anyio.to_thread.run_sync(cag.save_meta, DATA_DIR, tokens, state.model_id)
+        # a new document = a new conversation, in memory AND on disk
+        await anyio.to_thread.run_sync(cag.clear_history, DATA_DIR)
 
         state.fiche = text
         state.fiche_tokens = tokens
@@ -216,6 +239,13 @@ async def ask(request: Request):
                             state.history.append((question, answer))
                             state.pair_tokens.append(pair_tok)
                             state._history_tokens += pair_tok
+                            # Persist the conversation after each completed turn (small
+                            # JSON, worker thread) so it survives restarts alongside the
+                            # fiche cache. Aborted answers never reach this point — they
+                            # stay out of history, memory and disk alike.
+                            await anyio.to_thread.run_sync(
+                                cag.save_history, DATA_DIR,
+                                state.history, state.pair_tokens)
                         yield f"data: {json.dumps({'done': True, 'timings': chunk})}\n\n"
             except cag.LlamaError as e:
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
@@ -227,11 +257,39 @@ async def ask(request: Request):
 
 @app.post("/api/reset")
 async def reset() -> JSONResponse:
-    """Clear chat history. The cached document and its KV slot are kept."""
-    state.history = []
-    state.pair_tokens = []
-    state._history_tokens = 0
+    """Clear chat history (memory + disk). The cached document and its KV slot are kept.
+
+    Takes the slot lock: a reset racing an in-flight streaming /ask would otherwise be
+    silently undone (the /ask completion appends its turn and re-writes history.json
+    after the clear). Under the lock, reset simply waits for the answer to finish.
+    """
+    async with _slot_lock:
+        state.history = []
+        state.pair_tokens = []
+        state._history_tokens = 0
+        await anyio.to_thread.run_sync(cag.clear_history, DATA_DIR)
     return JSONResponse(content={"ok": True})
+
+
+@app.get("/api/history")
+async def history() -> JSONResponse:
+    """The current conversation (mirrors the persisted file), for page replay."""
+    return JSONResponse(content={
+        "turns": [{"user": u, "assistant": a} for u, a in state.history],
+    })
+
+
+@app.get("/api/doc")
+async def doc() -> JSONResponse:
+    """The usage doc baked into the image (CONTAINER.md), rendered by the page's
+    markdown viewer behind the header's Docs button."""
+    try:
+        text = await anyio.to_thread.run_sync(
+            lambda: DOC_PATH.read_text(encoding="utf-8"))
+    except OSError:
+        return JSONResponse(status_code=404, content={
+            "error": "no_doc", "message": "CONTAINER.md not found in this build."})
+    return JSONResponse(content={"markdown": text})
 
 
 @app.get("/api/status")

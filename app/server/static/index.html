@@ -241,6 +241,24 @@
 
   footer { text-align: center; color: var(--muted-2); font-size: 11px; padding: 6px 4px 10px; }
 
+  /* docs modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 20; background: rgba(5,6,9,.6);
+    backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .modal {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); max-width: 720px; width: 100%; max-height: 85vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-head {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--line-soft); background: var(--surface-2);
+  }
+  .modal-head h2 { margin: 0; font-size: 14px; font-weight: 650; flex: 1; }
+  .modal-body { overflow-y: auto; padding: 18px 20px; }
+
   @media (max-width: 560px) {
     .bubble-wrap { max-width: 100%; }
     #ingest h2 { font-size: 22px; }
@@ -256,6 +274,10 @@
   </div>
   <span class="model-pill" id="modeltag"></span>
   <span class="spacer"></span>
+  <button id="docsBtn" class="btn-ghost" title="How this app works">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+    Docs
+  </button>
   <button id="reingestBtn" class="btn-ghost hidden" title="Load a different document">
     <svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M20 14v6H4V4h6"/></svg>
     New document
@@ -328,7 +350,10 @@ let abortCtrl = null;
 
 /* ---------------- tiny markdown renderer (safe) ---------------- */
 function escapeHtml(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Quotes must be escaped too: renderInline builds href="..." from escaped text, and an
+  // unescaped `"` in a crafted link target would break out into a live attribute (XSS).
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function renderInline(s) {
   s = s.replace(/`([^`]+)`/g, (_, c) => `<code>${escapeHtml(c)}</code>`);
@@ -648,12 +673,56 @@ $("question").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); }
 });
 
+/* ---------------- docs modal ---------------- */
+let docCache = null;
+async function showDocs() {
+  if (docCache === null) {
+    try {
+      const r = await fetch("/api/doc");
+      const j = await r.json();
+      docCache = r.ok ? j.markdown : ("⚠ " + (j.message || "Docs unavailable."));
+    } catch (e) { docCache = "⚠ Docs unavailable: " + e; }
+  }
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Documentation">
+      <div class="modal-head">
+        <h2>How this app works</h2>
+        <button class="btn-ghost" id="docsClose">Close</button>
+      </div>
+      <div class="modal-body body"></div>
+    </div>`;
+  backdrop.querySelector(".modal-body").innerHTML = renderMarkdown(docCache);
+  const close = () => { backdrop.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  backdrop.querySelector("#docsClose").addEventListener("click", close);
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(backdrop);
+}
+$("docsBtn").addEventListener("click", showDocs);
+
 /* ---------------- boot ---------------- */
+async function replayHistory() {
+  // The conversation is persisted server-side next to the KV cache; replay it so a
+  // reload or container restart doesn't present an empty chat over a live context.
+  try {
+    const h = await (await fetch("/api/history")).json();
+    for (const t of h.turns || []) {
+      addMessage("user", t.user);
+      const { body, bw } = addMessage("assistant", "");
+      body.innerHTML = renderMarkdown(t.assistant);
+      addAssistantTools(bw, () => t.assistant);
+    }
+  } catch (_) { /* no history is fine */ }
+}
 (async () => {
   updateIngestMeter();
   try {
     const s = await getStatus();
-    if (s.ingested) showChat(s); else showIngest();
+    if (s.ingested) { await replayHistory(); showChat(s); }
+    else showIngest();
   } catch (e) {
     showIngest();
   }

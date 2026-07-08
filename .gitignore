@@ -1,1 +1,16 @@
 llama-b9864-bin*
+
+# python
+__pycache__/
+*.py[co]
+.venv/
+.pytest_cache/
+
+# local artifacts
+*.bak
+models/
+bench/kv_cache/
+
+# session/tooling dirs not for the repo
+.claude/
+app-review/

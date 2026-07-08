@@ -276,11 +276,12 @@ async def _drain(aiter):
     return out
 
 
-def test_ask_streaming_appends_history_and_counts():
+def test_ask_streaming_appends_history_and_counts(tmp_path, monkeypatch):
     # The main runtime path, with no llama: a fake stream yields two tokens then done.
     # Assert the turn lands in BOTH history and pair_tokens (equal length) and that
     # _history_tokens grows by the new pair's cached count.
     _fresh_slot_lock()
+    monkeypatch.setattr(appmain, "DATA_DIR", tmp_path)  # /ask persists history.json
     c = FakeClient(model="qwen.gguf")
 
     async def fake_stream(prompt):
@@ -307,3 +308,117 @@ def test_ask_streaming_appends_history_and_counts():
     # FakeClient.tokenize counts <|im_start|> *100; a rendered pair has two -> 200
     assert appmain.state.pair_tokens[0] == 200
     assert appmain.state._history_tokens == 200
+    # ...and the completed turn was persisted next to the cache for restart replay
+    assert cag.load_history(tmp_path) == ([("hi?", "Hello world")], [200])
+
+
+# --- chat-history persistence (survives restarts alongside the fiche cache) ------------
+
+def test_history_save_load_round_trip(tmp_path):
+    hist = [("q1", "a1"), ("q2", "a2 **md**")]
+    toks = [110, 240]
+    cag.save_history(tmp_path, hist, toks)
+    assert cag.load_history(tmp_path) == (hist, toks)
+
+
+def test_history_load_missing_and_corrupt_are_empty(tmp_path):
+    assert cag.load_history(tmp_path) == ([], [])
+    (tmp_path / "history.json").write_text("{torn", encoding="utf-8")
+    assert cag.load_history(tmp_path) == ([], [])
+
+
+def test_clear_history_removes_file_and_is_idempotent(tmp_path):
+    cag.save_history(tmp_path, [("q", "a")], [100])
+    cag.clear_history(tmp_path)
+    assert not (tmp_path / "history.json").exists()
+    cag.clear_history(tmp_path)  # second call must not raise
+
+
+def test_reset_clears_history_on_disk_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(appmain, "DATA_DIR", tmp_path)
+    cag.save_history(tmp_path, [("q", "a")], [100])
+    appmain.state.history = [("q", "a")]
+    appmain.state.pair_tokens = [100]
+    appmain.state._history_tokens = 100
+    run(appmain.reset())
+    assert appmain.state.history == [] and appmain.state._history_tokens == 0
+    assert not (tmp_path / "history.json").exists()
+
+
+def test_ingest_clears_prior_history_file(tmp_path, monkeypatch):
+    _fresh_slot_lock()
+    monkeypatch.setattr(appmain, "DATA_DIR", tmp_path)
+    cag.save_history(tmp_path, [("old", "conv")], [90])
+    c = FakeClient(model="qwen.gguf")
+    async def small(text): return 500
+    c.tokenize = small  # type: ignore[assignment]
+    appmain.state.client = c
+    appmain.state.model_id = "qwen.gguf"
+    resp = run(appmain.ingest(FakeRequest({"text": "NEW DOC"})))
+    assert resp.status_code == 200
+    assert not (tmp_path / "history.json").exists()
+
+
+def test_history_endpoint_returns_turns():
+    appmain.state.history = [("q1", "a1"), ("q2", "a2")]
+    resp = run(appmain.history())
+    body = json.loads(resp.body)
+    assert body["turns"] == [{"user": "q1", "assistant": "a1"},
+                             {"user": "q2", "assistant": "a2"}]
+
+
+def test_history_load_rejects_nonpositive_or_absurd_token_counts(tmp_path):
+    # DA: a tampered count must not poison trim_history's budget math — corrupt = empty.
+    (tmp_path / "history.json").write_text(
+        json.dumps({"turns": [{"user": "q", "assistant": "a", "tokens": -5}]}),
+        encoding="utf-8")
+    assert cag.load_history(tmp_path) == ([], [])
+    (tmp_path / "history.json").write_text(
+        json.dumps({"turns": [{"user": "q", "assistant": "a",
+                               "tokens": cag.N_CTX + 1}]}), encoding="utf-8")
+    assert cag.load_history(tmp_path) == ([], [])
+
+
+def test_reset_waits_for_slot_lock():
+    # DA MAJOR #1: reset racing a streaming /ask must serialize on the slot lock, or the
+    # in-flight turn resurrects the cleared history. Hold the lock and assert reset blocks.
+    _fresh_slot_lock()
+
+    async def scenario():
+        async with appmain._slot_lock:  # simulate an in-flight /ask
+            task = asyncio.ensure_future(appmain.reset())
+            done, pending = await asyncio.wait({task}, timeout=0.05)
+            assert not done, "reset() completed while the slot lock was held"
+            assert pending
+        return await task  # lock released -> reset proceeds
+
+    resp = run(scenario())
+    assert json.loads(resp.body)["ok"] is True
+
+
+def test_doc_endpoint_serves_container_md(tmp_path, monkeypatch):
+    doc = tmp_path / "CONTAINER.md"
+    doc.write_text("# CAG app\nUsage.", encoding="utf-8")
+    monkeypatch.setattr(appmain, "DOC_PATH", doc)
+    body = json.loads(run(appmain.doc()).body)
+    assert body["markdown"].startswith("# CAG app")
+
+
+def test_doc_endpoint_404_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(appmain, "DOC_PATH", tmp_path / "nope.md")
+    resp = run(appmain.doc())
+    assert resp.status_code == 404 and json.loads(resp.body)["error"] == "no_doc"
+
+
+def test_reprefill_startup_drops_stale_history(tmp_path):
+    # DA MAJOR #2: restored=False means the fiche was re-prefilled with a (possibly) new
+    # tokenizer; persisted pair token counts are stale. Lifespan drops them — emulate its
+    # branch exactly: load only when ok, clear the file otherwise.
+    cag.save_history(tmp_path, [("old q", "old a")], [150])
+    _seed_ingest(tmp_path, "other-model.gguf")  # positive mismatch -> re-prefill path
+    c = FakeClient(restore_ok=True, model="qwen.gguf")
+    _, _, ok = run(cag.restore_or_reprefill(c, tmp_path, "qwen.gguf"))
+    assert ok is False
+    if not ok:
+        cag.clear_history(tmp_path)
+    assert cag.load_history(tmp_path) == ([], [])
