@@ -71,8 +71,19 @@
     font-size: 11.5px; color: var(--muted); background: var(--surface-2);
     border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px;
     max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    /* Latin model id embedded in an Arabic (RTL) line: isolate so it doesn't scramble. */
+    unicode-bidi: plaintext;
   }
   .model-pill:empty { display: none; }
+  /* language picker — reuses the model-pill look on a native <select> */
+  .lang-pill {
+    font: inherit; font-size: 11.5px; color: var(--muted); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px;
+    cursor: pointer; appearance: none; -webkit-appearance: none;
+  }
+  .lang-pill:hover { color: var(--text); border-color: var(--muted-2); }
+  .lang-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .lang-pill option { color: var(--text); background: var(--surface); }
   .spacer { flex: 1; }
 
   /* ---------- buttons ---------- */
@@ -241,6 +252,60 @@
 
   footer { text-align: center; color: var(--muted-2); font-size: 11px; padding: 6px 4px 10px; }
 
+  /* ---------- ingest title ---------- */
+  .title-input {
+    display: block; width: 100%; margin: 0 0 12px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 11px 14px; font: inherit;
+  }
+  .title-input:focus { outline: none; border-color: var(--accent); }
+  .title-input::placeholder { color: var(--muted-2); }
+
+  /* ---------- guided-mode presets ---------- */
+  .presets {
+    max-width: var(--maxw); margin: 0 auto 8px; width: 100%;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .preset-chip {
+    background: var(--surface-2); color: var(--muted); border: 1px solid var(--line);
+    padding: 6px 12px; border-radius: 999px; font-size: 12.5px;
+  }
+  .preset-chip:hover:not(:disabled) { color: var(--text); border-color: var(--accent); background: var(--surface-3); }
+
+  /* ---------- library modal ---------- */
+  .lib-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+  .lib-empty { color: var(--muted); font-size: 13.5px; text-align: center; padding: 20px 0; }
+  .lib-row {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: var(--radius-sm); padding: 10px 12px;
+  }
+  .lib-row.active { border-color: var(--accent); background: var(--surface-3); }
+  .lib-info { flex: 1; min-width: 0; }
+  .lib-title { font-size: 14px; font-weight: 600; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lib-meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .lib-row-actions { display: flex; gap: 6px; flex: none; }
+  .lib-row-actions .btn-ghost { padding: 5px 10px; font-size: 12px; }
+  .lib-actions {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding-top: 14px; border-top: 1px solid var(--line-soft);
+  }
+  .btn-ghost.danger { color: var(--warn); border-color: rgba(255,122,122,.3); }
+  .btn-ghost.danger:hover:not(:disabled) { color: #fff; background: var(--warn); border-color: var(--warn); }
+
+  /* ---------- restore overlay ---------- */
+  .switch-overlay {
+    position: fixed; inset: 0; z-index: 30; background: rgba(5,6,9,.6);
+    backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center;
+  }
+  .switch-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 18px 22px; color: var(--text); font-size: 14px;
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+
   /* docs modal */
   .modal-backdrop {
     position: fixed; inset: 0; z-index: 20; background: rgba(5,6,9,.6);
@@ -264,6 +329,17 @@
     #ingest h2 { font-size: 22px; }
     .msg-tools { opacity: 1; }
   }
+
+  /* ---------- RTL (Arabic) ----------
+     dir="rtl" on <html> mirrors all the flexbox rows for free; these are the only physical
+     properties that need flipping to logical so lists, quotes and the user-bubble tail read
+     correctly right-to-left. */
+  [dir="rtl"] .body ul, [dir="rtl"] .body ol { padding-inline-start: 22px; padding-left: 0; }
+  [dir="rtl"] .body blockquote {
+    border-left: 0; border-inline-start: 3px solid var(--line);
+    padding: 2px 0; padding-inline-start: 14px;
+  }
+  [dir="rtl"] .msg.user .body { border-radius: 14px 14px 14px 4px; }
 </style>
 </head>
 <body>
@@ -272,19 +348,24 @@
     <div class="logo">C</div>
     <h1>Cache-Augmented Generation</h1>
   </div>
+  <select id="langSel" class="lang-pill" aria-label="Language"></select>
   <span class="model-pill" id="modeltag"></span>
   <span class="spacer"></span>
-  <button id="docsBtn" class="btn-ghost" title="How this app works">
+  <button id="libraryBtn" class="btn-ghost" data-i18n-title="nav.library.title" title="Your document library">
+    <svg class="icon" viewBox="0 0 24 24"><path d="M4 4h6a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H4z"/><path d="M20 4h-6a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5H20z"/></svg>
+    <span data-i18n="nav.library">Library</span>
+  </button>
+  <button id="docsBtn" class="btn-ghost" data-i18n-title="nav.docs.title" title="How this app works">
     <svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-    Docs
+    <span data-i18n="nav.docs">Docs</span>
   </button>
-  <button id="reingestBtn" class="btn-ghost hidden" title="Load a different document">
+  <button id="reingestBtn" class="btn-ghost hidden" data-i18n-title="nav.newdoc.title" title="Load a different document">
     <svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M20 14v6H4V4h6"/></svg>
-    New document
+    <span data-i18n="nav.newdoc">New document</span>
   </button>
-  <button id="resetBtn" class="btn-ghost hidden" title="Clear the conversation">
+  <button id="resetBtn" class="btn-ghost hidden" data-i18n-title="nav.clear.title" title="Clear the conversation">
     <svg class="icon" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>
-    Clear chat
+    <span data-i18n="nav.clear">Clear chat</span>
   </button>
 </header>
 
@@ -292,23 +373,25 @@
   <!-- INGEST VIEW -->
   <section id="ingest">
     <div class="ingest-inner">
-      <p class="eyebrow">Step 1 · Ingest</p>
-      <h2>Load a document to chat about</h2>
-      <p class="lede">Paste the text you want to ask questions about. It's prefilled into the
+      <p class="eyebrow" data-i18n="ingest.eyebrow">Step 1 · Ingest</p>
+      <h2 data-i18n="ingest.h2">Load a document to chat about</h2>
+      <p class="lede" data-i18n="ingest.lede">Paste the text you want to ask questions about. It's prefilled into the
         model's cache once and reused for every question — so answers stay fast and grounded
         in your document.</p>
+      <input id="docTitle" class="title-input" type="text" maxlength="80"
+             data-i18n-ph="ingest.title.ph" placeholder="Optional title (e.g. Le cycle de l'eau)">
       <div class="field">
-        <textarea id="fiche" placeholder="Paste your document here…" spellcheck="false"></textarea>
+        <textarea id="fiche" data-i18n-ph="ingest.fiche.ph" placeholder="Paste your document here…" spellcheck="false"></textarea>
         <div class="field-foot">
           <span id="charCount">0 characters</span>
-          <span class="meter-mini" title="Estimated fill of the ~12,000 token cache"><i id="tokenFill"></i></span>
+          <span class="meter-mini" data-i18n-title="ingest.meter.title" title="Estimated fill of the ~12,000 token cache"><i id="tokenFill"></i></span>
           <span id="tokenEst">~0 tokens</span>
         </div>
       </div>
       <div class="ingest-actions">
         <button id="ingestBtn" class="btn-primary">
           <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-          Ingest document
+          <span data-i18n="ingest.btn">Ingest document</span>
         </button>
         <span class="status-text" id="ingestStatus"></span>
         <span class="spacer"></span>
@@ -320,8 +403,9 @@
   <!-- CHAT VIEW -->
   <section id="chat" class="hidden">
     <div id="statusbar">
-      <span class="stat" id="fichetokStat"><span class="dot"></span>document <b id="fichetok">—</b></span>
-      <span class="stat">history</span>
+      <span class="stat" id="doctitleStat"><span class="dot"></span><b id="doctitle"></b></span>
+      <span class="stat" id="fichetokStat"><span data-i18n="status.document">document</span> <b id="fichetok">—</b></span>
+      <span class="stat"><span data-i18n="status.history">history</span></span>
       <span class="meter" title="Conversation history vs. available budget"><i id="histfill"></i></span>
       <span id="histtok">—</span>
       <span class="spacer"></span>
@@ -331,22 +415,291 @@
       <div id="messages"></div>
     </div>
     <div class="composer-zone">
+      <div class="presets" id="presets"></div>
       <div class="composer">
-        <textarea id="question" rows="1" placeholder="Ask about the document…" spellcheck="false"></textarea>
+        <textarea id="question" rows="1" data-i18n-ph="composer.ph" placeholder="Ask about the document…" spellcheck="false"></textarea>
         <button id="askBtn" class="send-btn" title="Send (Enter)" aria-label="Send">
           <svg class="icon" viewBox="0 0 24 24"><path d="M7 11l5-5 5 5"/><path d="M12 6v13"/></svg>
         </button>
       </div>
-      <p class="composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</p>
+      <p class="composer-hint" data-i18n-html="composer.hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</p>
     </div>
   </section>
 </main>
-<footer>Runs fully on-device · llama.cpp KV-cache slot reuse</footer>
+<footer data-i18n="footer">Runs fully on-device · llama.cpp KV-cache slot reuse</footer>
 
 <script>
 const $ = (id) => document.getElementById(id);
 let busy = false;
 let abortCtrl = null;
+let lastStatus = null;   // last /status payload, so a language switch can re-render it
+
+/* ================= internationalization (EN base + FR + AR) ================= */
+// All user-facing copy lives here. Interpolated strings are stored as functions.
+// The product name "Cache-Augmented Generation" stays untranslated; the wipe confirm word
+// "DELETE" is compared literally in every language (only the surrounding sentence is localized).
+const T = {
+  en: {
+    "nav.library": "Library", "nav.library.title": "Your document library",
+    "nav.docs": "Docs", "nav.docs.title": "How this app works",
+    "nav.newdoc": "New document", "nav.newdoc.title": "Load a different document",
+    "nav.clear": "Clear chat", "nav.clear.title": "Clear the conversation",
+    "ingest.eyebrow": "Step 1 · Ingest",
+    "ingest.h2": "Load a document to chat about",
+    "ingest.lede": "Paste the text you want to ask questions about. It's prefilled into the model's cache once and reused for every question — so answers stay fast and grounded in your document.",
+    "ingest.title.ph": "Optional title (e.g. Le cycle de l'eau)",
+    "ingest.fiche.ph": "Paste your document here…",
+    "ingest.chars": (n) => `${n.toLocaleString()} ${n === 1 ? "character" : "characters"}`,
+    "ingest.meter.title": "Estimated fill of the ~12,000 token cache",
+    "ingest.tokens": (n) => `~${n.toLocaleString()} tokens`,
+    "ingest.btn": "Ingest document",
+    "ingest.status.prefill": "Prefilling cache…",
+    "ingest.err.empty": "Paste some text first.",
+    "ingest.err.failed": "Ingest failed.",
+    "status.document": "document", "status.history": "history", "status.tok": "tok",
+    "status.restored": "cache restored from disk",
+    "composer.ph": "Ask about the document…",
+    "composer.send.title": "Send (Enter)", "composer.send.aria": "Send",
+    "composer.stop.title": "Stop generating", "composer.stop.aria": "Stop",
+    "composer.hint": "<kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line",
+    "footer": "Runs fully on-device · llama.cpp KV-cache slot reuse",
+    "empty.h3": "Ask anything about your document",
+    "empty.p": "Answers are grounded in the text you ingested. Try one of these to start:",
+    "sug1.t": "Summarize this document", "sug1.h": "Key points in a few bullets",
+    "sug2.t": "What are the main takeaways?", "sug2.h": "The essentials, briefly",
+    "sug3.t": "Draft 3 questions this doc answers", "sug3.h": "Explore what's inside",
+    "sug4.t": "Explain the hardest part simply", "sug4.h": "Plain-language walkthrough",
+    "preset.quiz.label": "Quiz me",
+    "preset.quiz.body": "Ask me 3 questions about the document, one at a time; wait for my answer before the next one and tell me if I am right, correcting me from the document.",
+    "preset.simpler.label": "Explain simpler",
+    "preset.simpler.body": "Explain the document in simpler terms, as if to a beginner, with a short everyday example.",
+    "preset.exercises.label": "Make 5 exercises",
+    "preset.exercises.body": "Create 5 exercises based on the document, from easy to hard, then give an answer key at the end.",
+    "preset.summary.label": "Summarize",
+    "preset.summary.body": "Summarize the document in a few clear bullet points.",
+    "preset.lang": "Reply in the same language as the document.",
+    "msg.copy": "Copy", "msg.copied": "Copied", "msg.noanswer": "(no answer)", "msg.stopped": "Stopped.",
+    "neterr": "Network error: ", "switch.restoring": "Restoring cache…",
+    "docs.head": "How this app works", "modal.close": "Close", "docs.unavail": "Docs unavailable.",
+    "lib.head": "Document library",
+    "lib.empty": "No documents yet. Ingest one, or import a content pack.",
+    "lib.untitled": "(untitled)", "lib.active": "active",
+    "lib.meta": (tok, active) => `${(tok || 0).toLocaleString()} tok${active ? " · active" : ""}`,
+    "lib.switch": "Switch", "lib.delete": "Delete",
+    "lib.export": "Export pack", "lib.export.title": "Download the whole library as a .tar pack",
+    "lib.import": "Import pack", "lib.import.title": "Import a .tar content pack",
+    "lib.importing": "Importing…",
+    "lib.wipe": "Wipe everything", "lib.wipe.title": "Delete everything on the device",
+    "del.confirm": (title) => `Delete “${title}”? Its cache and chat are removed from the device.`,
+    "del.failed": "Delete failed.", "del.error": "Delete error: ",
+    "switch.failed": "Switch failed.", "switch.error": "Switch error: ",
+    "switch.timeout": "Switch timed out — the server may be busy. Try again.",
+    "import.failed": "Import failed.", "import.error": "Import error: ",
+    "wipe.prompt": "This permanently deletes ALL documents, caches and chats on this device.\nType DELETE to confirm.",
+    "wipe.error": "Wipe error: ",
+    "http_status": (code) => `HTTP ${code}`,
+    err: {
+      empty: "Nothing to send.",
+      not_ingested: "Ingest a document before asking questions.",
+      unknown_doc: "No such document in the library.",
+      no_doc: "The help document isn't available in this build.",
+      bad_pack: "This file isn't a valid content pack.",
+      llama_unreachable: "The AI engine isn't responding. Please try again in a moment.",
+      library_full: (count, cap) => `The library already holds ${count} documents (max ${cap}). Delete one before ingesting another — each saved cache is ~300 MB on disk.`,
+      over_cap: (tokens, cap) => `Document is ${tokens} tokens, over the ${cap}-token cap. The whole document is held in the model's cache, which must fit the device's RAM and still leave room for the chat. Shorten the text and try again.`,
+    },
+  },
+  fr: {
+    "nav.library": "Bibliothèque", "nav.library.title": "Votre bibliothèque de documents",
+    "nav.docs": "Aide", "nav.docs.title": "Comment fonctionne l'application",
+    "nav.newdoc": "Nouveau document", "nav.newdoc.title": "Charger un autre document",
+    "nav.clear": "Effacer la discussion", "nav.clear.title": "Effacer la conversation",
+    "ingest.eyebrow": "Étape 1 · Charger",
+    "ingest.h2": "Chargez un document pour en discuter",
+    "ingest.lede": "Collez le texte sur lequel vous voulez poser des questions. Il est chargé une seule fois dans la mémoire du modèle, puis réutilisé à chaque question — les réponses restent rapides et fidèles à votre document.",
+    "ingest.title.ph": "Titre (facultatif, ex. : Le cycle de l'eau)",
+    "ingest.fiche.ph": "Collez votre document ici…",
+    "ingest.chars": (n) => `${n.toLocaleString()} ${n <= 1 ? "caractère" : "caractères"}`,
+    "ingest.meter.title": "Remplissage estimé du cache (~12 000 jetons)",
+    "ingest.tokens": (n) => `~${n.toLocaleString()} jetons`,
+    "ingest.btn": "Charger le document",
+    "ingest.status.prefill": "Préparation du cache…",
+    "ingest.err.empty": "Collez d'abord du texte.",
+    "ingest.err.failed": "Échec du chargement.",
+    "status.document": "document", "status.history": "historique", "status.tok": "jetons",
+    "status.restored": "cache restauré depuis le disque",
+    "composer.ph": "Posez une question sur le document…",
+    "composer.send.title": "Envoyer (Entrée)", "composer.send.aria": "Envoyer",
+    "composer.stop.title": "Arrêter la génération", "composer.stop.aria": "Arrêter",
+    "composer.hint": "<kbd>Entrée</kbd> pour envoyer · <kbd>Maj</kbd>+<kbd>Entrée</kbd> pour un saut de ligne",
+    "footer": "Fonctionne entièrement sur l'appareil · réutilisation du cache KV llama.cpp",
+    "empty.h3": "Posez n'importe quelle question sur votre document",
+    "empty.p": "Les réponses s'appuient uniquement sur le texte chargé. Essayez l'une de ces suggestions pour commencer :",
+    "sug1.t": "Résume ce document", "sug1.h": "Les points clés en quelques puces",
+    "sug2.t": "Quelles sont les idées principales ?", "sug2.h": "L'essentiel, en bref",
+    "sug3.t": "Propose 3 questions auxquelles ce document répond", "sug3.h": "Explorez son contenu",
+    "sug4.t": "Explique simplement la partie la plus difficile", "sug4.h": "Une explication en mots simples",
+    "preset.quiz.label": "Interroge-moi",
+    "preset.quiz.body": "Pose-moi 3 questions sur le document, une par une ; attends ma réponse avant la suivante et dis-moi si j'ai raison, en me corrigeant à partir du document.",
+    "preset.simpler.label": "Explique plus simplement",
+    "preset.simpler.body": "Explique le document en termes plus simples, comme à un débutant, avec un court exemple de la vie quotidienne.",
+    "preset.exercises.label": "Crée 5 exercices",
+    "preset.exercises.body": "Crée 5 exercices à partir du document, du plus facile au plus difficile, puis donne le corrigé à la fin.",
+    "preset.summary.label": "Résume",
+    "preset.summary.body": "Résume le document en quelques points clairs.",
+    "preset.lang": "Réponds dans la même langue que le document.",
+    "msg.copy": "Copier", "msg.copied": "Copié", "msg.noanswer": "(aucune réponse)", "msg.stopped": "Arrêté.",
+    "neterr": "Erreur réseau : ", "switch.restoring": "Restauration du cache…",
+    "docs.head": "Comment fonctionne l'application", "modal.close": "Fermer", "docs.unavail": "Aide indisponible.",
+    "lib.head": "Bibliothèque de documents",
+    "lib.empty": "Aucun document pour l'instant. Chargez-en un ou importez un pack de contenu.",
+    "lib.untitled": "(sans titre)", "lib.active": "actif",
+    "lib.meta": (tok, active) => `${(tok || 0).toLocaleString()} jetons${active ? " · actif" : ""}`,
+    "lib.switch": "Ouvrir", "lib.delete": "Supprimer",
+    "lib.export": "Exporter un pack", "lib.export.title": "Télécharger toute la bibliothèque en pack .tar",
+    "lib.import": "Importer un pack", "lib.import.title": "Importer un pack de contenu .tar",
+    "lib.importing": "Importation…",
+    "lib.wipe": "Tout effacer", "lib.wipe.title": "Supprimer tout ce qui se trouve sur l'appareil",
+    "del.confirm": (title) => `Supprimer « ${title} » ? Son cache et sa discussion seront retirés de l'appareil.`,
+    "del.failed": "Échec de la suppression.", "del.error": "Erreur de suppression : ",
+    "switch.failed": "Échec de l'ouverture.", "switch.error": "Erreur d'ouverture : ",
+    "switch.timeout": "Délai dépassé — le serveur est peut-être occupé. Réessayez.",
+    "import.failed": "Échec de l'importation.", "import.error": "Erreur d'importation : ",
+    "wipe.prompt": "Cette action supprime définitivement TOUS les documents, caches et discussions de cet appareil.\nTapez DELETE pour confirmer.",
+    "wipe.error": "Erreur d'effacement : ",
+    "http_status": (code) => `HTTP ${code}`,
+    err: {
+      empty: "Rien à envoyer.",
+      not_ingested: "Chargez un document avant de poser des questions.",
+      unknown_doc: "Ce document n'existe pas dans la bibliothèque.",
+      no_doc: "Le document d'aide n'est pas disponible dans cette version.",
+      bad_pack: "Ce fichier n'est pas un pack de contenu valide.",
+      llama_unreachable: "Le moteur d'IA ne répond pas. Réessayez dans un instant.",
+      library_full: (count, cap) => `La bibliothèque contient déjà ${count} documents (max ${cap}). Supprimez-en un avant d'en charger un autre — chaque cache enregistré occupe ~300 Mo.`,
+      over_cap: (tokens, cap) => `Le document fait ${tokens} jetons, au-delà de la limite de ${cap}. Tout le document est gardé dans le cache du modèle, qui doit tenir dans la mémoire de l'appareil tout en laissant de la place pour la discussion. Raccourcissez le texte et réessayez.`,
+    },
+  },
+  ar: {
+    "nav.library": "المكتبة", "nav.library.title": "مكتبة مستنداتك",
+    "nav.docs": "الدليل", "nav.docs.title": "كيف يعمل هذا التطبيق",
+    "nav.newdoc": "مستند جديد", "nav.newdoc.title": "تحميل مستند آخر",
+    "nav.clear": "مسح المحادثة", "nav.clear.title": "مسح المحادثة",
+    "ingest.eyebrow": "الخطوة 1 · التحميل",
+    "ingest.h2": "حمّل مستندًا لتتحدث عنه",
+    "ingest.lede": "الصق النص الذي تريد طرح الأسئلة حوله. يُحمَّل مرة واحدة في ذاكرة النموذج ثم يُعاد استخدامه مع كل سؤال، لتبقى الإجابات سريعة ومستندة إلى وثيقتك.",
+    "ingest.title.ph": "عنوان (اختياري، مثل: دورة الماء)",
+    "ingest.fiche.ph": "الصق مستندك هنا…",
+    "ingest.chars": (n) => `${n.toLocaleString()} حرف`,
+    "ingest.meter.title": "الامتلاء التقديري للذاكرة (~12000 رمز)",
+    "ingest.tokens": (n) => `~${n.toLocaleString()} رمز`,
+    "ingest.btn": "تحميل المستند",
+    "ingest.status.prefill": "جارٍ تحضير الذاكرة…",
+    "ingest.err.empty": "الصق نصًا أولًا.",
+    "ingest.err.failed": "فشل التحميل.",
+    "status.document": "المستند", "status.history": "السجل", "status.tok": "رمز",
+    "status.restored": "تمت استعادة الذاكرة من القرص",
+    "composer.ph": "اطرح سؤالًا عن المستند…",
+    "composer.send.title": "إرسال (Enter)", "composer.send.aria": "إرسال",
+    "composer.stop.title": "إيقاف التوليد", "composer.stop.aria": "إيقاف",
+    "composer.hint": "<kbd>Enter</kbd> للإرسال · <kbd>Shift</kbd>+<kbd>Enter</kbd> لسطر جديد",
+    "footer": "يعمل بالكامل على الجهاز · إعادة استخدام ذاكرة KV في llama.cpp",
+    "empty.h3": "اسأل أي شيء عن مستندك",
+    "empty.p": "تعتمد الإجابات على النص الذي حمّلته. جرّب أحد هذه الاقتراحات للبدء:",
+    "sug1.t": "لخّص هذا المستند", "sug1.h": "أهم النقاط في بضع نقاط",
+    "sug2.t": "ما هي الأفكار الرئيسية؟", "sug2.h": "الأساسيات باختصار",
+    "sug3.t": "اقترح 3 أسئلة يجيب عنها هذا المستند", "sug3.h": "استكشف محتواه",
+    "sug4.t": "اشرح الجزء الأصعب ببساطة", "sug4.h": "شرح بلغة مبسّطة",
+    "preset.quiz.label": "اختبرني",
+    "preset.quiz.body": "اطرح عليّ 3 أسئلة عن المستند، سؤالًا واحدًا في كل مرة؛ وانتظر إجابتي قبل السؤال التالي، وأخبرني إن كنت مصيبًا، مصحّحًا لي من المستند.",
+    "preset.simpler.label": "اشرح ببساطة",
+    "preset.simpler.body": "اشرح المستند بعبارات أبسط، كأنك تشرح لمبتدئ، مع مثال قصير من الحياة اليومية.",
+    "preset.exercises.label": "أنشئ 5 تمارين",
+    "preset.exercises.body": "أنشئ 5 تمارين مستندة إلى المستند، من الأسهل إلى الأصعب، ثم قدّم الإجابات النموذجية في النهاية.",
+    "preset.summary.label": "لخّص",
+    "preset.summary.body": "لخّص المستند في بضع نقاط واضحة.",
+    "preset.lang": "أجب بنفس لغة المستند.",
+    "msg.copy": "نسخ", "msg.copied": "تم النسخ", "msg.noanswer": "(لا توجد إجابة)", "msg.stopped": "تم الإيقاف.",
+    "neterr": "خطأ في الشبكة: ", "switch.restoring": "جارٍ استعادة الذاكرة…",
+    "docs.head": "كيف يعمل هذا التطبيق", "modal.close": "إغلاق", "docs.unavail": "الدليل غير متاح.",
+    "lib.head": "مكتبة المستندات",
+    "lib.empty": "لا توجد مستندات بعد. حمّل واحدًا أو استورد حزمة محتوى.",
+    "lib.untitled": "(بدون عنوان)", "lib.active": "نشط",
+    "lib.meta": (tok, active) => `${(tok || 0).toLocaleString()} رمز${active ? " · نشط" : ""}`,
+    "lib.switch": "فتح", "lib.delete": "حذف",
+    "lib.export": "تصدير حزمة", "lib.export.title": "تنزيل المكتبة كاملة كحزمة ‎.tar",
+    "lib.import": "استيراد حزمة", "lib.import.title": "استيراد حزمة محتوى ‎.tar",
+    "lib.importing": "جارٍ الاستيراد…",
+    "lib.wipe": "مسح كل شيء", "lib.wipe.title": "حذف كل شيء على الجهاز",
+    "del.confirm": (title) => `حذف «${title}»؟ ستُزال ذاكرته ومحادثته من الجهاز.`,
+    "del.failed": "فشل الحذف.", "del.error": "خطأ في الحذف: ",
+    "switch.failed": "فشل الفتح.", "switch.error": "خطأ في الفتح: ",
+    "switch.timeout": "انتهت المهلة — قد يكون الخادم مشغولًا. حاول مجددًا.",
+    "import.failed": "فشل الاستيراد.", "import.error": "خطأ في الاستيراد: ",
+    "wipe.prompt": "سيؤدي هذا إلى حذف جميع المستندات والذاكرة والمحادثات نهائيًا من هذا الجهاز.\nاكتب DELETE للتأكيد.",
+    "wipe.error": "خطأ في المسح: ",
+    "http_status": (code) => `HTTP ${code}`,
+    err: {
+      empty: "لا يوجد ما يُرسَل.",
+      not_ingested: "حمّل مستندًا قبل طرح الأسئلة.",
+      unknown_doc: "لا يوجد هذا المستند في المكتبة.",
+      no_doc: "وثيقة المساعدة غير متاحة في هذه النسخة.",
+      bad_pack: "هذا الملف ليس حزمة محتوى صالحة.",
+      llama_unreachable: "محرّك الذكاء الاصطناعي لا يستجيب. حاول مرة أخرى بعد قليل.",
+      library_full: (count, cap) => `تحتوي المكتبة بالفعل على ${count} مستندات (الحد الأقصى ${cap}). احذف واحدًا قبل تحميل آخر — كل ذاكرة محفوظة تشغل نحو 300 ميغابايت.`,
+      over_cap: (tokens, cap) => `المستند يحتوي على ${tokens} رمزًا، وهو يتجاوز الحد الأقصى ${cap}. تُحفظ الوثيقة كاملة في ذاكرة النموذج، التي يجب أن تتّسع في ذاكرة الجهاز مع ترك مساحة للمحادثة. اختصر النص وحاول مجددًا.`,
+    },
+  },
+};
+const LANGS = [
+  { code: "en", label: "English",  rtl: false },
+  { code: "fr", label: "Français", rtl: false },
+  { code: "ar", label: "العربية",  rtl: true  },
+];
+function pickInitialLang() {
+  const saved = localStorage.getItem("cag_lang");
+  if (saved && T[saved]) return saved;
+  const nav = (navigator.language || "en").slice(0, 2).toLowerCase();
+  return T[nav] ? nav : "fr";   // default FR (origin scenario: francophone Africa), not EN
+}
+let LANG = pickInitialLang();
+const t = (k, ...a) => {
+  const v = (T[LANG] && T[LANG][k]) ?? T.en[k] ?? k;   // fall back: lang → en → raw key
+  return typeof v === "function" ? v(...a) : v;
+};
+function applyLang(code) {
+  LANG = T[code] ? code : "en";
+  localStorage.setItem("cag_lang", LANG);
+  const rtl = !!(LANGS.find(l => l.code === LANG) || {}).rtl;
+  document.documentElement.lang = LANG;
+  document.documentElement.dir = rtl ? "rtl" : "ltr";
+  document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-html]").forEach(el => { el.innerHTML = t(el.dataset.i18nHtml); });
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
+  document.querySelectorAll("[data-i18n-title]").forEach(el => { el.title = t(el.dataset.i18nTitle); });
+  document.querySelectorAll("[data-i18n-aria]").forEach(el => { el.setAttribute("aria-label", t(el.dataset.i18nAria)); });
+  const sel = $("langSel"); if (sel) sel.value = LANG;
+  updateIngestMeter();      // "N characters" / "~N tokens"
+  renderPresets();          // rebuild chips in the new language
+  renderEmptyIfNeeded();    // rebuild suggestion cards
+  setSending(busy);         // send/stop button title+aria
+  if (lastStatus) renderStatus(lastStatus);  // refresh "tok" suffix, restored chip
+}
+// Localize a backend error from its stable code; fall back to the server message, then HTTP.
+function localizeError(j, httpStatus) {
+  const code = j && j.error;
+  const E = (T[LANG] && T[LANG].err) || T.en.err;
+  switch (code) {
+    case "over_cap":          return E.over_cap(j.tokens, j.cap);
+    case "library_full":      return E.library_full(j.count, j.cap);
+    case "not_ingested":      return E.not_ingested;
+    case "unknown_doc":       return E.unknown_doc;
+    case "no_doc":            return E.no_doc;
+    case "bad_pack":          return E.bad_pack;
+    case "llama_unreachable": return E.llama_unreachable;
+    case "empty":             return E.empty;
+    default:                  return (j && j.message) || t("http_status", httpStatus);
+  }
+}
 
 /* ---------------- tiny markdown renderer (safe) ---------------- */
 function escapeHtml(s) {
@@ -429,15 +782,19 @@ function showChat(s) {
   $("question").focus();
 }
 function renderStatus(s) {
+  lastStatus = s;
   $("modeltag").textContent = s.model && s.model !== "unknown" ? s.model : "";
-  $("fichetok").textContent = s.fiche_tokens.toLocaleString() + " tok";
+  const titleStat = $("doctitleStat");
+  if (s.title) { $("doctitle").textContent = s.title; titleStat.classList.remove("hidden"); }
+  else { titleStat.classList.add("hidden"); }
+  $("fichetok").textContent = s.fiche_tokens.toLocaleString() + " " + t("status.tok");
   const budget = Math.max(s.budget, 1);
   const pct = Math.min(100, Math.round((s.history_tokens / budget) * 100));
   const fill = $("histfill");
   fill.style.width = pct + "%";
   fill.style.background = pct > 90 ? "var(--warn)" : pct > 70 ? "var(--amber)" : "var(--ok)";
   $("histtok").textContent = `${s.history_tokens.toLocaleString()} / ${s.budget.toLocaleString()}`;
-  $("restoredtag").textContent = s.restored ? "cache restored from disk" : "";
+  $("restoredtag").textContent = s.restored ? t("status.restored") : "";
 }
 
 /* ---------------- ingest ---------------- */
@@ -446,8 +803,8 @@ function updateIngestMeter() {
   const chars = text.length;
   const tokens = Math.round(chars / 4); // rough estimate
   const pct = Math.min(100, Math.round((tokens / 12000) * 100));
-  $("charCount").textContent = chars.toLocaleString() + (chars === 1 ? " character" : " characters");
-  $("tokenEst").textContent = "~" + tokens.toLocaleString() + " tokens";
+  $("charCount").textContent = t("ingest.chars", chars);
+  $("tokenEst").textContent = t("ingest.tokens", tokens);
   const f = $("tokenFill");
   f.style.width = pct + "%";
   f.style.background = pct > 100 ? "var(--warn)" : pct > 85 ? "var(--amber)" : "var(--accent)";
@@ -456,26 +813,29 @@ $("fiche").addEventListener("input", updateIngestMeter);
 
 $("ingestBtn").addEventListener("click", async () => {
   const text = $("fiche").value.trim();
+  const title = $("docTitle").value.trim();
   $("ingestErr").textContent = "";
-  if (!text) { $("ingestErr").textContent = "Paste some text first."; $("fiche").focus(); return; }
+  if (!text) { $("ingestErr").textContent = t("ingest.err.empty"); $("fiche").focus(); return; }
   $("ingestBtn").disabled = true;
-  $("ingestStatus").innerHTML = '<span class="typing"><span></span><span></span><span></span></span> Prefilling cache…';
+  $("ingestStatus").innerHTML = '<span class="typing"><span></span><span></span><span></span></span> ' + t("ingest.status.prefill");
   try {
     const r = await fetch("/api/ingest", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, title }),
     });
     const j = await r.json();
     if (!r.ok) {
       $("ingestStatus").textContent = "";
-      $("ingestErr").textContent = j.message || "Ingest failed.";
+      $("ingestErr").textContent = localizeError(j, r.status) || t("ingest.err.failed");
       return;
     }
+    $("fiche").value = ""; $("docTitle").value = ""; updateIngestMeter();
     $("messages").innerHTML = "";
     showChat({ ingested: true, fiche_tokens: j.fiche_tokens, history_tokens: 0,
-               budget: j.budget, model: j.model, restored: false });
+               budget: j.budget, model: j.model, restored: false,
+               doc_id: j.doc_id, title: j.title, docs_count: j.docs_count });
   } catch (e) {
-    $("ingestErr").textContent = "Network error: " + e;
+    $("ingestErr").textContent = t("neterr") + e;
   } finally {
     $("ingestBtn").disabled = false;
     $("ingestStatus").textContent = "";
@@ -492,28 +852,60 @@ $("resetBtn").addEventListener("click", async () => {
   $("question").focus();
 });
 
+// Empty-state suggestion cards, by translation key (title + hint).
 const SUGGESTIONS = [
-  { t: "Summarize this document", h: "Key points in a few bullets" },
-  { t: "What are the main takeaways?", h: "The essentials, briefly" },
-  { t: "Draft 3 questions this doc answers", h: "Explore what's inside" },
-  { t: "Explain the hardest part simply", h: "Plain-language walkthrough" },
+  { t: "sug1.t", h: "sug1.h" }, { t: "sug2.t", h: "sug2.h" },
+  { t: "sug3.t", h: "sug3.h" }, { t: "sug4.t", h: "sug4.h" },
 ];
+
+/* ---------------- guided modes (one-tap prompt presets) ---------------- */
+// The chip LABEL and prompt BODY are localized to the UI language for naturalness, but the
+// body always ends with the DOCUMENT-language instruction (t("preset.lang")) so "Summarize"
+// over a French fiche still answers in French, whatever the UI language.
+const PRESETS = [
+  { label: "preset.quiz.label", body: "preset.quiz.body" },
+  { label: "preset.simpler.label", body: "preset.simpler.body" },
+  { label: "preset.exercises.label", body: "preset.exercises.body" },
+  { label: "preset.summary.label", body: "preset.summary.body" },
+];
+function renderPresets() {
+  const row = $("presets");
+  row.innerHTML = "";
+  PRESETS.forEach(p => {
+    const prompt = t(p.body) + " " + t("preset.lang");
+    const b = document.createElement("button");
+    b.className = "preset-chip";
+    b.textContent = t(p.label);
+    b.title = prompt;
+    b.disabled = busy;
+    b.addEventListener("click", () => {
+      if (busy) return;
+      $("question").value = prompt;
+      autoGrow();
+      ask();
+    });
+    row.appendChild(b);
+  });
+}
 function renderEmptyIfNeeded() {
   const m = $("messages");
   if (m.querySelector(".msg")) { const e = m.querySelector(".empty"); if (e) e.remove(); return; }
   m.innerHTML = "";
   const wrap = document.createElement("div");
   wrap.className = "empty";
-  wrap.innerHTML = `
-    <h3>Ask anything about your document</h3>
-    <p>Answers are grounded in the text you ingested. Try one of these to start:</p>
-    <div class="suggestions"></div>`;
-  const grid = wrap.querySelector(".suggestions");
+  const h3 = document.createElement("h3"); h3.textContent = t("empty.h3");
+  const p = document.createElement("p"); p.textContent = t("empty.p");
+  const grid = document.createElement("div"); grid.className = "suggestions";
+  wrap.appendChild(h3); wrap.appendChild(p); wrap.appendChild(grid);
   SUGGESTIONS.forEach(s => {
+    const title = t(s.t);
     const b = document.createElement("button");
     b.className = "suggest";
-    b.innerHTML = `${s.t}<span class="s-hint">${s.h}</span>`;
-    b.addEventListener("click", () => { $("question").value = s.t; autoGrow(); ask(); });
+    // textContent-safe: build title text node + hint span, no innerHTML with translated text
+    b.appendChild(document.createTextNode(title));
+    const hint = document.createElement("span"); hint.className = "s-hint"; hint.textContent = t(s.h);
+    b.appendChild(hint);
+    b.addEventListener("click", () => { $("question").value = title; autoGrow(); ask(); });
     grid.appendChild(b);
   });
   m.appendChild(wrap);
@@ -541,6 +933,9 @@ function addMessage(who, text) {
   bw.className = "bubble-wrap";
   const body = document.createElement("div");
   body.className = "body";
+  // Message direction follows the CONTENT, not the UI: a French answer read in an Arabic
+  // (RTL) UI must not be garbled, and vice-versa.
+  body.setAttribute("dir", "auto");
   if (who === "user") body.textContent = text;
   bw.appendChild(body);
 
@@ -551,17 +946,20 @@ function addMessage(who, text) {
   return { body, bw };
 }
 
+const ICON_COPY = '<svg class="icon" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+const ICON_DONE = '<svg class="icon" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>';
 function addAssistantTools(bw, getText) {
   const tools = document.createElement("div");
   tools.className = "msg-tools";
   const copy = document.createElement("button");
   copy.className = "tool-btn";
-  copy.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Copy';
+  const paint = (icon, label) => { copy.innerHTML = icon; copy.appendChild(document.createTextNode(label)); };
+  paint(ICON_COPY, t("msg.copy"));
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(getText());
-      copy.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>Copied';
-      setTimeout(() => { copy.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Copy'; }, 1400);
+      paint(ICON_DONE, t("msg.copied"));
+      setTimeout(() => paint(ICON_COPY, t("msg.copy")), 1400);
     } catch (_) {}
   });
   tools.appendChild(copy);
@@ -570,15 +968,18 @@ function addAssistantTools(bw, getText) {
 
 function setSending(sending) {
   const btn = $("askBtn");
+  // Guided-mode chips no-op while a turn streams; reflect that with a disabled state so it
+  // isn't a silent dead click.
+  document.querySelectorAll(".preset-chip").forEach(c => { c.disabled = sending; });
   if (sending) {
     btn.classList.add("stop");
-    btn.title = "Stop generating";
-    btn.setAttribute("aria-label", "Stop");
+    btn.title = t("composer.stop.title");
+    btn.setAttribute("aria-label", t("composer.stop.aria"));
     btn.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
   } else {
     btn.classList.remove("stop");
-    btn.title = "Send (Enter)";
-    btn.setAttribute("aria-label", "Send");
+    btn.title = t("composer.send.title");
+    btn.setAttribute("aria-label", t("composer.send.aria"));
     btn.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M7 11l5-5 5 5"/><path d="M12 6v13"/></svg>';
   }
 }
@@ -614,7 +1015,7 @@ async function ask() {
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       bodyEl.innerHTML = "";
-      bodyEl.textContent = "⚠ " + (j.message || ("HTTP " + r.status));
+      bodyEl.textContent = "⚠ " + localizeError(j, r.status);
       return;
     }
     const reader = r.body.getReader();
@@ -634,21 +1035,26 @@ async function ask() {
           if (!data) continue;
           let j; try { j = JSON.parse(data); } catch { continue; }
           if (j.token) { answer += j.token; schedule(); }
-          if (j.error) { answer += "\n\n⚠ " + j.error; schedule(); }
+          // A mid-stream error is always a backend LlamaError (engine down / timed out);
+          // show the localized generic rather than the raw English detail.
+          if (j.error) { answer += "\n\n⚠ " + t("err.llama_unreachable"); schedule(); }
           if (j.done) { renderStatus(await getStatus()); }
         }
       }
     }
     flush();
-    if (!answer.trim()) { bodyEl.textContent = "(no answer)"; }
+    if (!answer.trim()) { bodyEl.textContent = t("msg.noanswer"); }
     else { addAssistantTools(bw, () => answer); }
   } catch (e) {
     flush();
     if (e.name === "AbortError") {
-      if (!answer.trim()) bodyEl.innerHTML = '<span style="color:var(--muted)">Stopped.</span>';
-      else addAssistantTools(bw, () => answer);
+      if (!answer.trim()) {
+        const span = document.createElement("span");
+        span.style.color = "var(--muted)"; span.textContent = t("msg.stopped");
+        bodyEl.innerHTML = ""; bodyEl.appendChild(span);
+      } else addAssistantTools(bw, () => answer);
     } else {
-      bodyEl.textContent = "⚠ Network error: " + e;
+      bodyEl.textContent = "⚠ " + t("neterr") + e;
     }
   } finally {
     busy = false; abortCtrl = null;
@@ -680,19 +1086,21 @@ async function showDocs() {
     try {
       const r = await fetch("/api/doc");
       const j = await r.json();
-      docCache = r.ok ? j.markdown : ("⚠ " + (j.message || "Docs unavailable."));
-    } catch (e) { docCache = "⚠ Docs unavailable: " + e; }
+      docCache = r.ok ? j.markdown : ("⚠ " + localizeError(j, r.status));
+    } catch (e) { docCache = "⚠ " + t("docs.unavail") + " " + e; }
   }
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop";
   backdrop.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true" aria-label="Documentation">
       <div class="modal-head">
-        <h2>How this app works</h2>
-        <button class="btn-ghost" id="docsClose">Close</button>
+        <h2></h2>
+        <button class="btn-ghost" id="docsClose"></button>
       </div>
       <div class="modal-body body"></div>
     </div>`;
+  backdrop.querySelector(".modal-head h2").textContent = t("docs.head");
+  backdrop.querySelector("#docsClose").textContent = t("modal.close");
   backdrop.querySelector(".modal-body").innerHTML = renderMarkdown(docCache);
   const close = () => { backdrop.remove(); document.removeEventListener("keydown", onKey); };
   const onKey = (e) => { if (e.key === "Escape") close(); };
@@ -702,6 +1110,162 @@ async function showDocs() {
   document.body.appendChild(backdrop);
 }
 $("docsBtn").addEventListener("click", showDocs);
+
+/* ---------------- library (multi-document) ---------------- */
+// Apply a /api/status-shaped payload after a switch/delete/import/wipe: reroute to the
+// right view and replay the active document's conversation.
+async function applySession(s) {
+  $("messages").innerHTML = "";
+  if (s && s.ingested) { await replayHistory(); showChat(s); }
+  else { renderStatus(s || {}); showIngest(); }
+}
+
+async function switchDoc(id, close) {
+  const ov = document.createElement("div");
+  ov.className = "switch-overlay";
+  ov.innerHTML = '<div class="switch-card"><span class="typing"><span></span><span></span><span></span></span> ' + t("switch.restoring") + '</div>';
+  document.body.appendChild(ov);
+  // Restore is normally seconds; a re-prefill fallback can take minutes. Cap the wait so a
+  // wedged server never leaves the overlay spinning forever.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 420000);  // 7 min
+  try {
+    const r = await fetch("/api/switch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }), signal: ctrl.signal,
+    });
+    const s = await r.json();
+    if (!r.ok) { alert(s.error ? localizeError(s, r.status) : t("switch.failed")); return; }
+    if (close) close();
+    await applySession(s);
+  } catch (e) {
+    alert(e.name === "AbortError" ? t("switch.timeout") : t("switch.error") + e);
+  } finally { clearTimeout(timer); ov.remove(); }
+}
+
+async function deleteDoc(d, close) {
+  if (!confirm(t("del.confirm", d.title || d.id))) return;
+  try {
+    const r = await fetch("/api/library/" + encodeURIComponent(d.id), { method: "DELETE" });
+    const s = await r.json();
+    if (!r.ok) { alert(s.error ? localizeError(s, r.status) : t("del.failed")); return; }
+    if (close) close();
+    await applySession(s);
+  } catch (e) { alert(t("del.error") + e); }
+}
+
+function renderLibList(list, data, close) {
+  list.innerHTML = "";
+  if (!data.docs || !data.docs.length) {
+    const p = document.createElement("p");
+    p.className = "lib-empty";
+    p.textContent = t("lib.empty");
+    list.appendChild(p);
+    return;
+  }
+  data.docs.forEach(d => {
+    const active = d.id === data.active;
+    const row = document.createElement("div");
+    row.className = "lib-row" + (active ? " active" : "");
+
+    const info = document.createElement("div");
+    info.className = "lib-info";
+    const title = document.createElement("div");
+    title.className = "lib-title";
+    title.textContent = d.title || t("lib.untitled");   // textContent = XSS-safe
+    const meta = document.createElement("div");
+    meta.className = "lib-meta";
+    meta.textContent = t("lib.meta", d.fiche_tokens, active);
+    info.appendChild(title); info.appendChild(meta);
+    row.appendChild(info);
+
+    const actions = document.createElement("div");
+    actions.className = "lib-row-actions";
+    if (!active) {
+      const sw = document.createElement("button");
+      sw.className = "btn-ghost"; sw.textContent = t("lib.switch");
+      sw.addEventListener("click", () => switchDoc(d.id, close));
+      actions.appendChild(sw);
+    }
+    const del = document.createElement("button");
+    del.className = "btn-ghost danger"; del.textContent = t("lib.delete");
+    del.addEventListener("click", () => deleteDoc(d, close));
+    actions.appendChild(del);
+    row.appendChild(actions);
+    list.appendChild(row);
+  });
+}
+
+async function showLibrary() {
+  let data;
+  try { data = await (await fetch("/api/library")).json(); }
+  catch (e) { data = { docs: [], active: null }; }
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Document library">
+      <div class="modal-head">
+        <h2 data-i18n="lib.head"></h2>
+        <button class="btn-ghost" id="libClose" data-i18n="modal.close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="lib-list" id="libList"></div>
+        <div class="lib-actions">
+          <button class="btn-ghost" id="exportBtn" data-i18n="lib.export" data-i18n-title="lib.export.title"></button>
+          <button class="btn-ghost" id="importBtn" data-i18n="lib.import" data-i18n-title="lib.import.title"></button>
+          <input type="file" id="importFile" accept=".tar,application/x-tar" class="hidden">
+          <span class="spacer"></span>
+          <button class="btn-ghost danger" id="wipeBtn" data-i18n="lib.wipe" data-i18n-title="lib.wipe.title"></button>
+        </div>
+      </div>
+    </div>`;
+  // Localize this freshly-built modal (it isn't in the DOM when applyLang last swept).
+  backdrop.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+  backdrop.querySelectorAll("[data-i18n-title]").forEach(el => { el.title = t(el.dataset.i18nTitle); });
+  const close = () => { backdrop.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  backdrop.querySelector("#libClose").addEventListener("click", close);
+  document.addEventListener("keydown", onKey);
+
+  renderLibList(backdrop.querySelector("#libList"), data, close);
+
+  backdrop.querySelector("#exportBtn").addEventListener("click", () => {
+    window.location = "/api/pack/export";
+  });
+  const fileInput = backdrop.querySelector("#importFile");
+  const importBtn = backdrop.querySelector("#importBtn");
+  importBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    const f = fileInput.files[0]; if (!f) return;
+    importBtn.disabled = true; importBtn.textContent = t("lib.importing");
+    try {
+      const r = await fetch("/api/pack/import", { method: "POST", body: f });
+      const s = await r.json();
+      if (!r.ok) { alert(s.error ? localizeError(s, r.status) : t("import.failed")); return; }
+      close();
+      await applySession(s);
+    } catch (e) { alert(t("import.error") + e); }
+    finally {
+      importBtn.disabled = false; importBtn.textContent = t("lib.import");
+      fileInput.value = "";  // allow re-selecting the same file after a failed import
+    }
+  });
+  backdrop.querySelector("#wipeBtn").addEventListener("click", async () => {
+    // "DELETE" is compared literally in every language; only the sentence is localized.
+    const typed = prompt(t("wipe.prompt"));
+    if (typed !== "DELETE") return;
+    try {
+      await fetch("/api/wipe", { method: "POST" });
+      close();
+      await applySession({ ingested: false });
+    } catch (e) { alert(t("wipe.error") + e); }
+  });
+
+  document.body.appendChild(backdrop);
+}
+$("libraryBtn").addEventListener("click", showLibrary);
 
 /* ---------------- boot ---------------- */
 async function replayHistory() {
@@ -717,8 +1281,21 @@ async function replayHistory() {
     }
   } catch (_) { /* no history is fine */ }
 }
+/* ---------------- language picker ---------------- */
+(function initLangPicker() {
+  const sel = $("langSel");
+  LANGS.forEach(l => {
+    const o = document.createElement("option");
+    o.value = l.code; o.textContent = l.label;
+    sel.appendChild(o);
+  });
+  sel.value = LANG;
+  sel.addEventListener("change", () => applyLang(sel.value));
+})();
+
 (async () => {
-  updateIngestMeter();
+  renderPresets();
+  applyLang(LANG);   // localize the static page (and dir/lang on <html>) before first paint
   try {
     const s = await getStatus();
     if (s.ingested) { await replayHistory(); showChat(s); }

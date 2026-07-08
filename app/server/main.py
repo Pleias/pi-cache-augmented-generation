@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tarfile
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,6 +23,10 @@ from . import cag
 
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080")
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+# Upper bound on an uploaded content pack (bytes). 20 docs x ~300 MB ≈ 6 GB; the 8 GB
+# default leaves headroom while still rejecting a runaway/poisoned pack before it fills the
+# SD. Override with PACK_MAX_BYTES for larger fleets.
+PACK_MAX_BYTES = int(os.environ.get("PACK_MAX_BYTES", cag.DEFAULT_MAX_PACK_BYTES))
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 # Usage doc baked into the image at / by the Dockerfile; when running from a checkout
 # (tests, local dev) fall back to the copy next to the Dockerfile.
@@ -52,6 +58,11 @@ class AppState:
         self.restored: bool = False
         self.fiche: str = ""
         self.fiche_tokens: int = 0
+        # The active document in the library (None when nothing is loaded); its title and
+        # the library size are mirrored here so /api/status never has to read disk.
+        self.doc_id: str | None = None
+        self.title: str = ""
+        self.docs_count: int = 0
         self.history: list[tuple[str, str]] = []
         # cached ChatML token count of each history pair, kept in lockstep with `history`
         # so trim_history budgets by summation instead of re-tokenizing the whole history
@@ -60,51 +71,52 @@ class AppState:
         # last accurate history token count (sum of pair_tokens after the latest trim)
         self._history_tokens: int = 0
 
+    def reset_session(self) -> None:
+        """Return to the "no active document" state (delete-last / wipe). docs_count is
+        managed by the caller since it reflects the library, not the loaded session."""
+        self.ingested = False
+        self.restored = False
+        self.fiche = ""
+        self.fiche_tokens = 0
+        self.doc_id = None
+        self.title = ""
+        self.history = []
+        self.pair_tokens = []
+        self._history_tokens = 0
+
 
 state = AppState()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Open the shared HTTP client and attempt to restore a prior ingest on boot."""
+    """Open the shared HTTP client, migrate any legacy layout, and restore the active
+    document from the library on boot."""
     async with httpx.AsyncClient() as http:
         state.client = cag.LlamaClient(LLAMA_URL, http)
         state.model_id = await state.client.model_id()
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        try:
-            restored = await cag.restore_or_reprefill(
-                state.client, DATA_DIR, state.model_id)
-        except cag.LlamaError as e:
-            # server not ready or restore/prefill failed hard: start empty, let the user
-            # re-ingest. Logged as a warning so the operator can see why.
-            print(f"[startup] restore failed, starting without ingest: {e}", flush=True)
-            restored = None
-        if restored is not None:
-            self_fiche, self_tokens, ok = restored
-            state.fiche = self_fiche
-            state.fiche_tokens = self_tokens
-            state.ingested = True
-            state.restored = ok
-            # The conversation is persisted separately from the slot file (see cag.py):
-            # reload it so the UI can replay it and the next /ask keeps its context. Its
-            # KV is not in the restored slot (fiche prefix only) — the first /ask
-            # re-prefills the history tail, which is small.
-            #
-            # Only on a genuine restore, though: restored=False means the fiche was just
-            # RE-prefilled (model changed / meta corrupt), so the persisted pair token
-            # counts came from a different tokenizer — replaying them could overflow the
-            # budget math. A changed model is a new conversation: drop it.
+        # Fold a pre-library single-doc volume into the library layout (idempotent).
+        await anyio.to_thread.run_sync(cag.migrate_legacy, DATA_DIR)
+        lib = await anyio.to_thread.run_sync(cag.load_library, DATA_DIR)
+        state.docs_count = len(lib.docs)
+        if lib.active and lib.get(lib.active) is not None:
+            try:
+                ok = await _activate(lib.active)
+            except cag.LlamaError as e:
+                # server not ready or restore/prefill failed hard: start without an active
+                # doc, let the user pick one. Logged so the operator can see why.
+                print(f"[startup] restore failed, no active document: {e}", flush=True)
+                ok = False
             if ok:
-                state.history, state.pair_tokens = cag.load_history(DATA_DIR)
-                state._history_tokens = sum(state.pair_tokens)
+                print(f"[startup] active doc {state.doc_id!r} loaded: {state.fiche_tokens} "
+                      f"prefix tokens, restored={state.restored}, "
+                      f"history turns={len(state.history)}", flush=True)
             else:
-                await anyio.to_thread.run_sync(cag.clear_history, DATA_DIR)
-                print("[startup] fiche re-prefilled (model changed or meta invalid); "
-                      "dropping persisted chat history", flush=True)
-            print(f"[startup] ingest loaded: {self_tokens} prefix tokens, "
-                  f"restored={ok}, history turns={len(state.history)}", flush=True)
+                print("[startup] active document could not be restored", flush=True)
         else:
-            print("[startup] no prior ingest found", flush=True)
+            print(f"[startup] no active document ({state.docs_count} in library)",
+                  flush=True)
         yield
 
 
@@ -135,6 +147,63 @@ async def _pair_token_count(client: cag.LlamaClient, user: str, assistant: str) 
         return len(rendered) // 3 + 1
 
 
+def _status_payload() -> dict:
+    """The session snapshot returned by /api/status and every endpoint that changes the
+    active document (switch / delete / import), so the front updates from one shape."""
+    return {
+        "ingested": state.ingested,
+        "fiche_tokens": state.fiche_tokens,
+        "history_tokens": state._history_tokens,
+        "budget": cag.history_budget(state.fiche_tokens) if state.ingested else 0,
+        "model": state.model_id,
+        "restored": state.restored,
+        "doc_id": state.doc_id,
+        "title": state.title,
+        "docs_count": state.docs_count,
+    }
+
+
+async def _activate(doc_id: str) -> bool:
+    """Make `doc_id` the live document: restore its saved KV slot into slot 0 (or
+    re-prefill on a miss), load its persisted history into state, and mark it active in
+    the index. Caller MUST hold _slot_lock. Returns False if the id is unknown.
+
+    Mirrors the startup restore path exactly: on a genuine restore the conversation is
+    replayed; on a re-prefill (model change / restore failure) the stale-tokenizer history
+    is dropped.
+    """
+    lib = await anyio.to_thread.run_sync(cag.load_library, DATA_DIR)
+    entry = lib.get(doc_id)
+    if entry is None:
+        return False
+    dd = cag.doc_dir(DATA_DIR, doc_id)
+    restored = await cag.restore_or_reprefill(
+        _client(), dd, state.model_id, cag.slot_filename(doc_id))
+    if restored is None:
+        return False
+    fiche, tokens, ok = restored
+    state.fiche = fiche
+    state.fiche_tokens = tokens
+    state.ingested = True
+    state.restored = ok
+    state.doc_id = doc_id
+    state.title = entry.title
+    if ok:
+        state.history, state.pair_tokens = await anyio.to_thread.run_sync(
+            cag.load_history, dd)
+    else:
+        await anyio.to_thread.run_sync(cag.clear_history, dd)
+        state.history, state.pair_tokens = [], []
+    state._history_tokens = sum(state.pair_tokens)
+    # Record the activation (and a re-prefill's fresh token count) back to the index.
+    entry.fiche_tokens = tokens
+    entry.last_used = cag.now_iso()
+    lib.active = doc_id
+    await anyio.to_thread.run_sync(cag.save_library, DATA_DIR, lib)
+    state.docs_count = len(lib.docs)
+    return True
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     """Serve the single-file chat page (read once at import)."""
@@ -143,13 +212,16 @@ async def index() -> HTMLResponse:
 
 @app.post("/api/ingest")
 async def ingest(request: Request) -> JSONResponse:
-    """Tokenize the pasted document, enforce the cap, prefill + save its KV cache.
+    """Tokenize the pasted document, enforce the caps, prefill + save its KV slot, and add
+    it to the library as a NEW active document (its own dir + `<id>.bin` slot).
 
-    On success the document text and metadata are persisted to the volume and the chat
-    history is reset (a new document = a new conversation).
+    A fresh document is a fresh conversation. The library size cap (US-18) is checked
+    before the expensive prefill so an over-full library fails fast.
     """
     payload = await request.json()
     text = (payload or {}).get("text", "")
+    title = (payload or {}).get("title")
+    title = title if isinstance(title, str) else None
     if not isinstance(text, str) or not text.strip():
         return JSONResponse(status_code=400,
                             content={"error": "empty", "message": "No text to ingest."})
@@ -158,6 +230,16 @@ async def ingest(request: Request) -> JSONResponse:
     system_prefix = cag.build_system_prefix(text)
     # Serialize against /ask and other /ingest calls: prefill + save mutate the single slot.
     async with _slot_lock:
+        lib = await anyio.to_thread.run_sync(cag.load_library, DATA_DIR)
+        if len(lib.docs) >= cag.MAX_DOCS:
+            return JSONResponse(status_code=400, content={
+                "error": "library_full", "count": len(lib.docs), "cap": cag.MAX_DOCS,
+                "message": (
+                    f"The library already holds {len(lib.docs)} documents (max "
+                    f"{cag.MAX_DOCS}). Delete one before ingesting another — each saved "
+                    "cache is ~300 MB on disk."),
+            })
+
         try:
             tokens = await client.tokenize(system_prefix)
         except cag.LlamaError as e:
@@ -174,29 +256,41 @@ async def ingest(request: Request) -> JSONResponse:
                     "try again."),
             })
 
+        doc_id = cag.new_doc_id()
         try:
-            await client.prefill_and_save(system_prefix)
+            await client.prefill_and_save(system_prefix, cag.slot_filename(doc_id))
         except cag.LlamaError as e:
             return JSONResponse(status_code=503, content={"error": "llama_unreachable",
                                 "message": f"prefill failed: {e}"})
 
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        # Writes go through a worker thread: slow SD I/O must not block the event loop.
-        await anyio.to_thread.run_sync(_write_text, DATA_DIR / "fiche.txt", text)
-        await anyio.to_thread.run_sync(cag.save_meta, DATA_DIR, tokens, state.model_id)
-        # a new document = a new conversation, in memory AND on disk
-        await anyio.to_thread.run_sync(cag.clear_history, DATA_DIR)
+        # Persist the document into its own library directory (blocking I/O off the loop).
+        dd = cag.doc_dir(DATA_DIR, doc_id)
+        await anyio.to_thread.run_sync(lambda: dd.mkdir(parents=True, exist_ok=True))
+        await anyio.to_thread.run_sync(_write_text, dd / "fiche.txt", text)
+        await anyio.to_thread.run_sync(cag.save_meta, dd, tokens, state.model_id)
+        await anyio.to_thread.run_sync(cag.clear_history, dd)  # fresh conversation
+
+        entry = cag.DocEntry(
+            id=doc_id, title=cag.derive_title(text, title),
+            fiche_tokens=tokens, created=cag.now_iso(), last_used=cag.now_iso())
+        lib.docs.append(entry)
+        lib.active = doc_id
+        await anyio.to_thread.run_sync(cag.save_library, DATA_DIR, lib)
 
         state.fiche = text
         state.fiche_tokens = tokens
         state.ingested = True
         state.restored = False  # freshly prefilled this session, not restored from disk
+        state.doc_id = doc_id
+        state.title = entry.title
         state.history = []
         state.pair_tokens = []
         state._history_tokens = 0
+        state.docs_count = len(lib.docs)
     return JSONResponse(content={
         "ingested": True, "fiche_tokens": tokens,
         "budget": cag.history_budget(tokens), "model": state.model_id,
+        "doc_id": doc_id, "title": entry.title, "docs_count": state.docs_count,
     })
 
 
@@ -241,11 +335,14 @@ async def ask(request: Request):
                             state._history_tokens += pair_tok
                             # Persist the conversation after each completed turn (small
                             # JSON, worker thread) so it survives restarts alongside the
-                            # fiche cache. Aborted answers never reach this point — they
-                            # stay out of history, memory and disk alike.
-                            await anyio.to_thread.run_sync(
-                                cag.save_history, DATA_DIR,
-                                state.history, state.pair_tokens)
+                            # fiche cache. Written into the ACTIVE document's directory.
+                            # Aborted answers never reach this point — they stay out of
+                            # history, memory and disk alike.
+                            if state.doc_id is not None:
+                                await anyio.to_thread.run_sync(
+                                    cag.save_history,
+                                    cag.doc_dir(DATA_DIR, state.doc_id),
+                                    state.history, state.pair_tokens)
                         yield f"data: {json.dumps({'done': True, 'timings': chunk})}\n\n"
             except cag.LlamaError as e:
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
@@ -267,7 +364,9 @@ async def reset() -> JSONResponse:
         state.history = []
         state.pair_tokens = []
         state._history_tokens = 0
-        await anyio.to_thread.run_sync(cag.clear_history, DATA_DIR)
+        if state.doc_id is not None:
+            await anyio.to_thread.run_sync(
+                cag.clear_history, cag.doc_dir(DATA_DIR, state.doc_id))
     return JSONResponse(content={"ok": True})
 
 
@@ -295,11 +394,159 @@ async def doc() -> JSONResponse:
 @app.get("/api/status")
 async def status() -> JSONResponse:
     """Session snapshot for the page's status bar and view routing."""
+    return JSONResponse(content=_status_payload())
+
+
+# --- document library ------------------------------------------------------------------
+
+@app.get("/api/library")
+async def library() -> JSONResponse:
+    """The library index + active id, for the front's document picker. Lock-free: the
+    index is written atomically (tmp + rename), so a reader always sees a whole file."""
+    lib = await anyio.to_thread.run_sync(cag.load_library, DATA_DIR)
     return JSONResponse(content={
-        "ingested": state.ingested,
-        "fiche_tokens": state.fiche_tokens,
-        "history_tokens": state._history_tokens,
-        "budget": cag.history_budget(state.fiche_tokens) if state.ingested else 0,
-        "model": state.model_id,
-        "restored": state.restored,
+        "docs": [d.to_dict() for d in lib.docs], "active": lib.active,
     })
+
+
+@app.post("/api/switch")
+async def switch(request: Request) -> JSONResponse:
+    """Make another library document active: restore its slot (seconds, no re-prefill) and
+    load its history. Serialized on the slot lock — it mutates the single live slot."""
+    payload = await request.json()
+    doc_id = (payload or {}).get("id")
+    if not isinstance(doc_id, str) or not doc_id:
+        return JSONResponse(status_code=400,
+                            content={"error": "empty", "message": "No document id."})
+    async with _slot_lock:
+        try:
+            ok = await _activate(doc_id)
+        except cag.LlamaError as e:
+            return JSONResponse(status_code=503, content={"error": "llama_unreachable",
+                                "message": f"restore failed: {e}"})
+        if not ok:
+            return JSONResponse(status_code=404, content={
+                "error": "unknown_doc", "message": "No such document in the library."})
+        payload_out = _status_payload()
+    return JSONResponse(content=payload_out)
+
+
+@app.delete("/api/library/{doc_id}")
+async def delete_doc(doc_id: str) -> JSONResponse:
+    """Remove a document (its dir + slot + history). Deleting the active one falls back to
+    the most-recent remaining document, or to the no-document state if it was the last."""
+    async with _slot_lock:
+        lib = await anyio.to_thread.run_sync(cag.load_library, DATA_DIR)
+        if lib.get(doc_id) is None:
+            return JSONResponse(status_code=404, content={
+                "error": "unknown_doc", "message": "No such document in the library."})
+        was_active = lib.active == doc_id
+        await anyio.to_thread.run_sync(cag.remove_doc, DATA_DIR, doc_id)
+        lib.docs = [d for d in lib.docs if d.id != doc_id]
+        if was_active:
+            fallback = lib.most_recent()
+            lib.active = fallback.id if fallback else None
+            await anyio.to_thread.run_sync(cag.save_library, DATA_DIR, lib)
+            state.docs_count = len(lib.docs)
+            if fallback is not None:
+                await _activate(fallback.id)  # restores its slot + reloads its history
+            else:
+                state.reset_session()
+        else:
+            await anyio.to_thread.run_sync(cag.save_library, DATA_DIR, lib)
+            state.docs_count = len(lib.docs)
+        payload_out = _status_payload()
+    return JSONResponse(content=payload_out)
+
+
+# --- content packs (export / import) + privacy purge -----------------------------------
+
+@app.get("/api/pack/export")
+async def pack_export() -> StreamingResponse:
+    """Stream a tar of the whole library (index + docs + slots) for sneakernet / backup.
+
+    Only the SMALL files (index + each doc's fiche/meta/history — KBs) are snapshotted under
+    the slot lock; the lock is then released and the heavy ~300 MB slot files are streamed
+    into the tar from their originals. A slot deleted between snapshot and read is skipped
+    (the export stays a valid tar; that document re-prefills on first switch elsewhere), and
+    /ask /switch are not blocked for the minutes the slot copy takes."""
+    async with _slot_lock:
+        small, slots = await anyio.to_thread.run_sync(cag.pack_manifest, DATA_DIR)
+    # Lock released: assemble the tar (slow SD copy of the .bin slots) off the lock.
+    spooled = await anyio.to_thread.run_sync(cag.build_pack_from_manifest, small, slots)
+
+    def _iter():
+        try:
+            while True:
+                chunk = spooled.read(256 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            spooled.close()
+
+    return StreamingResponse(
+        _iter(), media_type="application/x-tar",
+        headers={"Content-Disposition": 'attachment; filename="cag-pack.tar"'})
+
+
+@app.post("/api/pack/import")
+async def pack_import(request: Request) -> JSONResponse:
+    """Import a content pack (raw tar body): validate, merge into the library, and — if no
+    document is currently active — activate the most-recent imported one.
+
+    The upload is spooled to disk (TMPDIR=/data/tmp on the Pi, not tmpfs) and capped at
+    PACK_MAX_BYTES so a hostile/oversized pack can't exhaust storage while being read; the
+    extraction-time size guards live in cag.import_pack."""
+    spooled = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, suffix=".tar")
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > PACK_MAX_BYTES:
+            spooled.close()
+            return JSONResponse(status_code=413, content={
+                "error": "too_large",
+                "message": (f"Pack exceeds the {PACK_MAX_BYTES}-byte upload limit. "
+                            "Split it or raise PACK_MAX_BYTES.")})
+        spooled.write(chunk)
+    spooled.seek(0)
+    async with _slot_lock:
+        try:
+            newest = await anyio.to_thread.run_sync(
+                lambda: cag.import_pack(DATA_DIR, spooled, max_total_bytes=PACK_MAX_BYTES))
+        except cag.PackTooLargeError as e:
+            spooled.close()
+            return JSONResponse(status_code=507,
+                                content={"error": "pack_too_large", "message": str(e)})
+        except cag.PackError as e:
+            spooled.close()
+            return JSONResponse(status_code=400,
+                                content={"error": "bad_pack", "message": str(e)})
+        except tarfile.TarError as e:
+            spooled.close()
+            return JSONResponse(status_code=400, content={
+                "error": "bad_pack", "message": f"not a valid pack archive: {e}"})
+        spooled.close()
+        lib = await anyio.to_thread.run_sync(cag.load_library, DATA_DIR)
+        state.docs_count = len(lib.docs)
+        # Fresh volume (nothing loaded): activate the most-recent imported document.
+        if not state.ingested:
+            target = newest
+            if target is None:
+                mr = lib.most_recent()
+                target = mr.id if mr else None
+            if target is not None:
+                await _activate(target)
+        payload_out = _status_payload()
+    return JSONResponse(content=payload_out)
+
+
+@app.post("/api/wipe")
+async def wipe() -> JSONResponse:
+    """Privacy purge (US-12): delete ALL documents, slots, histories and the index, and
+    reset the session to not-ingested."""
+    async with _slot_lock:
+        await anyio.to_thread.run_sync(cag.wipe_all, DATA_DIR)
+        state.reset_session()
+        state.docs_count = 0
+    return JSONResponse(content={"ok": True})

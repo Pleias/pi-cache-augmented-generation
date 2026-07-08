@@ -23,7 +23,7 @@ Raspberry Pi 4. Two halves:
 ## Commands
 
 ```bash
-# app tests (32, mocked llama — no server needed)
+# app tests (mocked llama — no server needed)
 cd app && uv run --with pytest pytest tests/ -q
 
 # app live smoke against a running container (user runs)
@@ -49,8 +49,11 @@ uv run bench/cag_bench.py --tokens-only
   `history.json` = conversation (atomic write per completed turn, cached per-pair token
   counts). Restart: restore slot → replay history in UI → first ask re-prefills only the
   history tail. Model change ⇒ drop history (stale tokenizer counts).
-- **Single slot 0 + `asyncio.Lock`** serializes /ask, /ingest, /reset. Any new endpoint
-  touching slot or history state must take `_slot_lock`.
+- **Single slot 0 + `asyncio.Lock`**: every MUTATING endpoint (/ask, /ingest, /reset,
+  /switch, delete, pack import, wipe) takes `_slot_lock`. Read-only endpoints
+  (/status, /library, /history) are deliberately lock-free — state files are written
+  atomically (tmp+rename), and blocking the doc picker behind a 5-min prefill is worse.
+  Pack export takes the lock only to snapshot, then streams lock-free.
 - History cap: budget = `16384 − fiche_tokens − 1024`; drop oldest pairs. Fiche cap
   12,000 tokens, enforced on the full system prefix, reject with token count.
 - Front (`app/server/static/index.html`) is a single file, no external assets; its

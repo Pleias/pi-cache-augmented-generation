@@ -21,6 +21,13 @@ VENV_PY="/opt/venv/bin/python"
 # The saved KV slot lives here; the whole persistence feature depends on this dir.
 mkdir -p "$CACHE_DIR"
 
+# Content-pack export/import stream through Python's tempfile (SpooledTemporaryFile), which
+# rolls over to $TMPDIR once a pack exceeds the in-memory threshold. Pin TMPDIR to the
+# SD-backed data volume, NOT the default /tmp (commonly tmpfs = RAM): a multi-GB pack spilling
+# into tmpfs would exhaust the 4 GB Pi's memory. On-disk here, it just uses card space.
+export TMPDIR="$DATA_DIR/tmp"
+mkdir -p "$TMPDIR"
+
 # The base image's ENTRYPOINT is the llama-server binary, but its path varies across
 # builds. Resolve it defensively.
 LLAMA_BIN="${LLAMA_BIN:-$(command -v llama-server || true)}"
