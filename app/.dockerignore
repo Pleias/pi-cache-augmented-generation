@@ -1,0 +1,11 @@
+# Keep the build context tiny and the image clean.
+.venv/
+**/__pycache__/
+*.py[co]
+.pytest_cache/
+.git/
+.gitignore
+data/
+tests/
+smoke.sh
+*.md

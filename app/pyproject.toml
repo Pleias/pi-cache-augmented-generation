@@ -1,0 +1,19 @@
+[project]
+name = "pi-cag-app"
+version = "0.1.0"
+description = "Cache-Augmented Generation example app: FastAPI + llama-server, ships zero data"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<0.116",
+    "uvicorn>=0.34,<0.35",
+    "httpx>=0.28,<0.29",
+]
+
+# Minimal, pinned stack for a Raspberry Pi 4 target (linux/arm64) and x86_64.
+# Plain uvicorn (no [standard] extras) keeps the image small and avoids compiling
+# uvloop/httptools wheels on arm64. Run:
+#   uv sync                        # create/refresh the locked env
+#   uv run uvicorn server.main:app # serve (llama-server must be up on :8080)
+
+[tool.uv]
+package = false

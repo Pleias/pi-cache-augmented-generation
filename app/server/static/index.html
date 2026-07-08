@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cache-Augmented Generation</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --text: #e6e8ec; --muted: #9aa3b2; --accent: #5b8cff; --accent2: #3f6fe0;
+    --user: #243044; --warn: #ff6b6b; --ok: #4cd08a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: #e6e8ec;
+    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    padding: 12px 18px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 12px; background: var(--panel);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .tag { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  button {
+    background: var(--accent2); color: #fff; border: 0; border-radius: 8px;
+    padding: 8px 14px; font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+  button.ghost:hover { color: #e6e8ec; border-color: var(--muted); }
+  main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  .hidden { display: none !important; }
+
+  /* ingest view */
+  #ingest { max-width: 760px; margin: 0 auto; padding: 28px 18px; width: 100%; }
+  #ingest h2 { margin: 0 0 6px; font-size: 18px; }
+  #ingest p { color: var(--muted); margin: 0 0 16px; }
+  textarea {
+    width: 100%; min-height: 320px; resize: vertical; background: var(--panel2);
+    color: #e6e8ec; border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  .err { color: var(--warn); font-size: 13px; }
+  .count { color: var(--muted); font-size: 13px; }
+
+  /* chat view */
+  #chat { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  #statusbar {
+    display: flex; align-items: center; gap: 16px; padding: 8px 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel); font-size: 12px;
+    color: var(--muted);
+  }
+  #statusbar .fill { flex: 1; max-width: 240px; height: 6px; background: var(--panel2);
+    border-radius: 4px; overflow: hidden; }
+  #statusbar .fill > i { display: block; height: 100%; background: var(--accent); width: 0; }
+  #messages { flex: 1; overflow-y: auto; padding: 18px; display: flex;
+    flex-direction: column; gap: 14px; }
+  .msg { max-width: 760px; width: 100%; margin: 0 auto; }
+  .msg .who { font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .05em; margin-bottom: 4px; }
+  .msg .body { white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user .body { background: var(--user); padding: 10px 12px; border-radius: 10px; }
+  .msg.assistant .body { padding: 2px 0; }
+  .composer {
+    border-top: 1px solid var(--line); padding: 12px 18px; background: var(--panel);
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+  .composer textarea { min-height: 44px; max-height: 160px; flex: 1; }
+  footer { text-align: center; color: var(--muted); font-size: 11px; padding: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cache-Augmented Generation</h1>
+  <span class="tag" id="modeltag"></span>
+  <span class="spacer"></span>
+  <button id="reingestBtn" class="ghost hidden">Re-ingest</button>
+  <button id="resetBtn" class="ghost hidden">Reset chat</button>
+</header>
+
+<main>
+  <!-- INGEST VIEW -->
+  <section id="ingest">
+    <h2>Ingest a document</h2>
+    <p>Paste the text you want to chat about. It is prefilled into the model's cache
+       once and reused for every question. Cap: 12,000 tokens (the document as prefilled,
+       including a small instruction wrapper).</p>
+    <textarea id="fiche" placeholder="Paste your document here…"></textarea>
+    <div class="row">
+      <button id="ingestBtn">Ingest</button>
+      <span class="count" id="ingestStatus"></span>
+      <span class="spacer"></span>
+      <span class="err" id="ingestErr"></span>
+    </div>
+  </section>
+
+  <!-- CHAT VIEW -->
+  <section id="chat" class="hidden">
+    <div id="statusbar">
+      <span id="fichetok">document: — tok</span>
+      <span>history</span>
+      <span class="fill"><i id="histfill"></i></span>
+      <span id="histtok">—</span>
+      <span id="restoredtag"></span>
+    </div>
+    <div id="messages"></div>
+    <div class="composer">
+      <textarea id="question" rows="1" placeholder="Ask about the document…"></textarea>
+      <button id="askBtn">Ask</button>
+    </div>
+  </section>
+</main>
+<footer>Runs fully on-device · llama.cpp KV-cache slot reuse</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let busy = false;
+
+async function getStatus() {
+  const r = await fetch("/api/status");
+  return r.json();
+}
+
+function showIngest() {
+  $("ingest").classList.remove("hidden");
+  $("chat").classList.add("hidden");
+  $("reingestBtn").classList.add("hidden");
+  $("resetBtn").classList.add("hidden");
+}
+
+function showChat(s) {
+  $("ingest").classList.add("hidden");
+  $("chat").classList.remove("hidden");
+  $("reingestBtn").classList.remove("hidden");
+  $("resetBtn").classList.remove("hidden");
+  renderStatus(s);
+}
+
+function renderStatus(s) {
+  $("modeltag").textContent = s.model && s.model !== "unknown" ? s.model : "";
+  $("fichetok").textContent = `document: ${s.fiche_tokens.toLocaleString()} tok`;
+  const budget = Math.max(s.budget, 1);
+  const pct = Math.min(100, Math.round((s.history_tokens / budget) * 100));
+  $("histfill").style.width = pct + "%";
+  $("histtok").textContent = `${s.history_tokens.toLocaleString()} / ${s.budget.toLocaleString()} tok`;
+  $("restoredtag").textContent = s.restored ? "· cache restored from disk" : "";
+}
+
+// --- ingest ---
+$("ingestBtn").addEventListener("click", async () => {
+  const text = $("fiche").value.trim();
+  $("ingestErr").textContent = "";
+  if (!text) { $("ingestErr").textContent = "Paste some text first."; return; }
+  $("ingestBtn").disabled = true;
+  $("ingestStatus").textContent = "Prefilling cache… this can take a moment.";
+  try {
+    const r = await fetch("/api/ingest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const j = await r.json();
+    if (!r.ok) {
+      $("ingestStatus").textContent = "";
+      $("ingestErr").textContent = j.message || "Ingest failed.";
+      return;
+    }
+    $("messages").innerHTML = "";
+    showChat({ ingested: true, fiche_tokens: j.fiche_tokens, history_tokens: 0,
+               budget: j.budget, model: j.model, restored: false });
+  } catch (e) {
+    $("ingestErr").textContent = "Network error: " + e;
+  } finally {
+    $("ingestBtn").disabled = false;
+    $("ingestStatus").textContent = "";
+  }
+});
+
+// --- chat ---
+$("reingestBtn").addEventListener("click", () => { showIngest(); });
+$("resetBtn").addEventListener("click", async () => {
+  await fetch("/api/reset", { method: "POST" });
+  $("messages").innerHTML = "";
+  renderStatus(await getStatus());
+});
+
+function addMessage(who, text) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + who;
+  const label = document.createElement("div");
+  label.className = "who";
+  label.textContent = who === "user" ? "You" : "Assistant";
+  const body = document.createElement("div");
+  body.className = "body";
+  body.textContent = text;
+  wrap.appendChild(label); wrap.appendChild(body);
+  $("messages").appendChild(wrap);
+  $("messages").scrollTop = $("messages").scrollHeight;
+  return body;
+}
+
+async function ask() {
+  if (busy) return;
+  const q = $("question").value.trim();
+  if (!q) return;
+  busy = true;
+  $("askBtn").disabled = true;
+  $("question").value = "";
+  addMessage("user", q);
+  const bodyEl = addMessage("assistant", "");
+  try {
+    const r = await fetch("/api/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      bodyEl.textContent = "⚠ " + (j.message || ("HTTP " + r.status));
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let answer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      // SSE frames are separated by a blank line
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        for (const line of frame.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data) continue;
+          let j; try { j = JSON.parse(data); } catch { continue; }
+          if (j.token) { answer += j.token; bodyEl.textContent = answer;
+            $("messages").scrollTop = $("messages").scrollHeight; }
+          if (j.error) { bodyEl.textContent = "⚠ " + j.error; }
+          if (j.done) { renderStatus(await getStatus()); }
+        }
+      }
+    }
+    if (!answer) bodyEl.textContent = "(no answer)";
+  } catch (e) {
+    bodyEl.textContent = "⚠ Network error: " + e;
+  } finally {
+    busy = false;
+    $("askBtn").disabled = false;
+    $("question").focus();
+  }
+}
+
+$("askBtn").addEventListener("click", ask);
+$("question").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); }
+});
+
+// --- boot: route to the right view ---
+(async () => {
+  try {
+    const s = await getStatus();
+    if (s.ingested) showChat(s); else showIngest();
+  } catch (e) {
+    showIngest();
+  }
+})();
+</script>
+</body>
+</html>
