@@ -14,7 +14,7 @@ Source files (PleIAs-tested models only):
 | Qwen2.5-1.5B | corpus (21k, entries 29-38) | `corpus29-38_corpus-15b-full_20260705-013454.json` |
 
 Qwen3-1.7B and Baguettotron are **excluded** — no raw JSON logs exist for them, only
-aggregate tables in `docs/results_*.md`, which don't carry the per-question
+aggregate tables in `docs/results/results_*.md`, which don't carry the per-question
 `prompt_ms`/`predicted_ms` fields needed for this computation.
 
 Definitions:
@@ -99,7 +99,7 @@ tok/s for 0.5B and 7.1-7.3 tok/s for 1.5B, both well above the corresponding
 `naive`/`cag` decode rates at any context size.
 
 **Excluded models**: Qwen3-1.7B and Baguettotron have no raw per-question JSON
-logs in `bench/results/` — only aggregate summary tables in `docs/results_*.md`
+logs in `bench/results/` — only aggregate summary tables in `docs/results/results_*.md`
 — so they cannot be included in this per-row throughput computation.
 
 ---
@@ -115,7 +115,7 @@ below was done with `python3` (sums/means/divisions), not eyeballed — see the
 
 **Measured-vs-derived legend**
 - **[measured]** — computed directly from per-row JSON in `bench/results/` (`sum(tokens)/sum(ms)*1000` for tok/s, `mean(ttft_ms)` for TTFT).
-- **[derived]** — computed from the *aggregate* per-question-average ms figures in `docs/results_qwen3_1.7b.md` plus the context-token counts stated there (no per-row output-token counts exist for Qwen3, so decode tok/s could not be independently recomputed — see note below).
+- **[derived]** — computed from the *aggregate* per-question-average ms figures in `docs/results/results_qwen3_1.7b.md` plus the context-token counts stated there (no per-row output-token counts exist for Qwen3, so decode tok/s could not be independently recomputed — see note below).
 - **[single probe]** — one live `llama-server` `print_timing` reading, not a full benchmark run (Baguettotron only).
 
 ### Master table
@@ -166,11 +166,11 @@ never re-prefilled. Compare to the `naive` row directly above it for the real
 prefill rate at that context size.
 
 `**` = Qwen3 `cag` prefill is reported as raw ms (2820-4213ms) rather than a
-tok/s rate for the same reason as above — `docs/results_qwen3_1.7b.md` does
+tok/s rate for the same reason as above — `docs/results/results_qwen3_1.7b.md` does
 not log the small re-prefilled `prompt_n` for `cag` rows, so no denominator
 token count exists to divide by.
 
-`†` = `docs/results_qwen3_1.7b.md` reports per-question-average **ms** only
+`†` = `docs/results/results_qwen3_1.7b.md` reports per-question-average **ms** only
 (prefill/decode/total), not output token counts (`predicted_n`). Decode tok/s
 therefore could not be independently recomputed from token counts the way the
 Qwen2.5 rows were. The `~6.3` (nocontext) and `~4-5` (naive/cag, context in
@@ -214,7 +214,35 @@ indicative, not comparable in sample size to the Qwen2.5 rows.
 
 **3. Measured vs derived vs single-probe, by model:**
 - **Qwen2.5-0.5B and Qwen2.5-1.5B**: every number above is **[measured]** — computed via Python (`sum(prompt_n)/sum(prompt_ms)*1000` etc.) directly from the per-row JSON logs in `bench/results/` (`entry31_qwen-full_20260704-202428.json`, `entry31_qwen25-1.5b-full_20260705-001832.json`, `corpus29-38_corpus-05b-full_20260704-215342.json`, `corpus29-38_corpus-15b-full_20260705-013454.json`), n=8-9 rows per cell.
-- **Qwen3-1.7B**: **[derived]** from the per-question-average ms table in `docs/results_qwen3_1.7b.md` (a 2-question smoke run, not the full 9-question suite). Prefill tok/s was computed here from that doc's context-token counts ÷ its prefill-ms; decode tok/s could not be independently recomputed (no output-token counts logged) and is carried through from the doc's own stated aggregate rate.
+- **Qwen3-1.7B**: **[derived]** from the per-question-average ms table in `docs/results/results_qwen3_1.7b.md` (a 2-question smoke run, not the full 9-question suite). Prefill tok/s was computed here from that doc's context-token counts ÷ its prefill-ms; decode tok/s could not be independently recomputed (no output-token counts logged) and is carried through from the doc's own stated aggregate rate.
 - **Baguettotron**: **[single probe]** — prefill ≈290 tok/s / decode ≈28.5 tok/s is one live `llama-server` `print_timing` reading (262ms/76tok prefill, 17955ms/512tok decode), not a benchmark aggregate. Separately, `docs/results/results_baguettotron.md` records fiche-prefill *times only* (naive ~15-21s, cag ~0.6-0.85s, no decode data). **Baguettotron and the wider PleIAs RAG family were excluded from the formal CAG throughput analysis**: they are query-first models (context must follow the question to stay grounded), which is structurally incompatible with prefix-cache CAG (context must precede the question to form a stable, reusable KV prefix). The cag timing above is real only for the source-first ordering that CAG requires, under which Baguettotron's answers are ungrounded — so despite the ~24-28x mechanical prefill speedup, CAG is not usable with this model family.
 
 **4. Hardware**: all rows are Raspberry Pi (dedicated), except Baguettotron's single probe and doc timings, which per `docs/results/results_baguettotron.md` were also measured on the Pi (a contended Xeon run exists in that doc but is explicitly flagged there as unusable noise and is not included here).
+
+---
+
+## Example-app datapoint — Qwen2.5-1.5B **Q4_K_M** (Pi 4, 2026-07-08)
+
+All benchmark rows above use Q8_0 weights. The packaged app (`app/`) ships **Q4_K_M**;
+its live smoke run on a Pi 4 (147-token document, `llama-server` `print_timing`, n=4
+requests) gives:
+
+| Model | Context (tok) | Mode | Prefill tok/s | Decode tok/s | Basis |
+|---|---:|---|---:|---:|---|
+| Qwen2.5-1.5B **Q4_K_M** | 147 | ingest prefill | 53.4 | — | single smoke run |
+| Qwen2.5-1.5B **Q4_K_M** | ~150–260 (cached) | cag ask ×3 | 44–47 (new tokens only*) | **12.0–12.4** | single smoke run |
+
+`*` same caveat as the `cag` rows above — only the new question/history tokens are
+prefilled; the document prefix is reused from cache.
+
+**Q4 vs Q8 decode: 12.0 vs 6.0 tok/s — a clean 2×.** Decode is memory-bandwidth-bound
+(the model streams all weight bytes per generated token); Q4_K_M halves the bytes vs
+Q8_0, so decode doubles. Context here is small (~150–260 tok vs 1.9k in the benchmark
+rows), which flatters it slightly, but the near-empty-context Q8 ceiling was 7.3 tok/s —
+Q4's 12 tok/s clears it by 1.6×, so most of the gain is quantization, not context size.
+
+**Gotcha — `--parallel` auto default.** Recent llama-server builds default `-np -1`
+(auto): on the x86 test box it allocated **n_slots = 4** → 4×16,384 unified KV → CPU
+decode scanned the whole 65k buffer per token → **0.36 tok/s** (~30× slowdown) despite
+prefix caching working perfectly. Single-user CAG must pin `--parallel 1` (the app's
+entrypoint does; `bench/run_server.sh` launches with defaults that predate this).

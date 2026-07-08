@@ -26,6 +26,39 @@ education.
 
 Full detail, methodology, and caveats: [`docs/TECH_REPORT.md`](docs/TECH_REPORT.md).
 
+## The example app — CAG in a box
+
+The findings are packaged as a runnable app in [`app/`](app/): a single Docker image
+(x86_64 + arm64, **Raspberry Pi 4 is the floor target**) bundling `llama-server` +
+**Qwen2.5-1.5B-Instruct Q4_K_M** + a FastAPI backend + a single-file chat UI. It ships
+**zero content data** — you paste your own document (≤12,000 tokens; over-cap is rejected
+with the actual token count), the app prefills the KV cache **once**, saves it to your
+mounted volume, and **restores it on restart** (no re-prefill). Multi-turn chat streams
+over the cached prefix with a capped history budget.
+
+```bash
+# build (or pull ghcr.io/pleias/cag-app once published — CI builds on v* tags)
+docker build -t cag-app ./app
+
+# run — /data holds your document + the saved KV cache slot
+docker run -d --name cag -p 8000:8000 -v "$HOME/cag-data:/data" cag-app
+
+# open http://localhost:8000 → paste a document → chat
+# verify the full pipeline (ingest, grounded EN/FR answers, multi-turn, restart persistence):
+CONTAINER=cag ./app/smoke.sh
+```
+
+Measured on a Pi 4 (Q4_K_M): **44–53 tok/s prefill, 12 tok/s decode** — 2× the benchmark's
+Q8_0 decode, because decode is memory-bandwidth-bound and Q4 halves the weight bytes.
+A grounded answer over a cached document lands in a few seconds. Design spec:
+[`docs/superpowers/specs/2026-07-07-cag-app-design.md`](docs/superpowers/specs/2026-07-07-cag-app-design.md);
+new numbers + operational notes: [`docs/TECH_REPORT.md`](docs/TECH_REPORT.md) §8.
+
+> Gotcha we hit: recent `llama-server` builds default `--parallel` to auto → 4 slots →
+> 4×16k unified KV → CPU decode collapsed to 0.36 tok/s. Single-user CAG needs
+> `--parallel 1` (the app's entrypoint pins it). Details in
+> [`docs/throughput.md`](docs/throughput.md).
+
 ## What is CAG (vs RAG)?
 
 **RAG** (Retrieval-Augmented Generation) retrieves the *k* most relevant chunks for each
@@ -41,6 +74,12 @@ See [`docs/USE_CASES.md`](docs/USE_CASES.md) for when each one wins.
 ```
 .
 ├── extensions_geographie_deuxieme_etape_ce1.json   # dataset: 49 French CE1 geography fiches
+├── app/                              # the example app (see "CAG in a box" above)
+│   ├── Dockerfile / entrypoint.sh    # multi-arch image: llama-server + FastAPI, model baked in
+│   ├── server/                       # FastAPI app: ingest → cache → SSE chat; static web UI
+│   ├── tests/ + smoke.sh             # 21 unit tests + live curl suite (incl. restart persistence)
+│   └── pyproject.toml / uv.lock      # app deps (fastapi, uvicorn, httpx)
+├── .github/workflows/publish-image.yml # buildx amd64+arm64 → ghcr.io/pleias/cag-app on v* tags
 ├── bench/
 │   ├── cag_bench.py                  # the benchmark runner (nocontext / naive / cag modes)
 │   ├── questions_entry31.json        # single-fiche questions (entry 31, "water points")
@@ -55,7 +94,7 @@ See [`docs/USE_CASES.md`](docs/USE_CASES.md) for when each one wins.
 │   ├── throughput.md                 # tok/s breakdown computed from the raw JSON logs
 │   ├── pi_setup.md                   # Raspberry Pi launch notes
 │   ├── cag_benchmark_design.md       # benchmark design rationale
-│   └── results_*.md                  # per-experiment, per-question result writeups
+│   └── results/results_*.md          # per-experiment, per-question result writeups
 ├── pyproject.toml / uv.lock          # uv-managed deps (cag_bench.py also carries inline
 │                                      # PEP-723 metadata, so `uv run` works standalone)
 └── llama-b9864-bin-ubuntu-x64/       # prebuilt x86 CPU llama.cpp (gitignored, not in repo —
@@ -191,5 +230,6 @@ discarded for timing because it was shared/contended (load ~55) and produced noi
 signal. Decode — not prefill — is the bottleneck at large cached context (down to ~1.2–2.9
 tok/s at 21k tokens), so CAG's biggest wins are on bounded, single-lesson contexts rather than
 large concatenated corpora. See `docs/TECH_REPORT.md` §7 for the full limitations list
-(cold-start isolation, output truncation, KV-size assumptions, and the not-yet-benchmarked
-disk save/restore CAG path).
+(cold-start isolation, output truncation, KV-size assumptions). The disk save/restore CAG
+path — flagged there as "not yet benchmarked" — is now implemented and live-validated in
+the example app (`docs/TECH_REPORT.md` §8): the cache survives container restarts.

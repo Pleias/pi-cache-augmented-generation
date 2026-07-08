@@ -91,7 +91,7 @@ moderate depth win. KV quantization (`-ctk q8_0 -ctv q8_0`) halves it independen
 quant.
 
 **Quality scorecard** (strictly-correct answers per question type; from the per-question
-outputs in `docs/results_*.md`, §9). Single-fiche counts the **best of the three context
+outputs in `docs/results/results_*.md`, §9). Single-fiche counts the **best of the three context
 variants**; corpus is the 8 cross-fiche questions.
 
 | model | test | recall | answer-key | utility | cross-fiche |
@@ -134,7 +134,7 @@ model-dependent: on **Qwen2.5-1.5B**, adding the exercises (`answer` → `answer
 that flips the "do exercises help?" corrigé questions from a right-but-guessed label to a correctly
 *justified* one; going further to `full` adds little (sometimes identical, sometimes a slight
 regression). On the **0.5B** the same extra context does *not* fix the corrigé questions — a model-
-capability limit, not a context one (see §5 F5). Per-question outputs are in `docs/results_*.md` (§9).
+capability limit, not a context one (see §5 F5). Per-question outputs are in `docs/results/results_*.md` (§9).
 
 **Total wait, without vs with CAG** (naive = re-prefill each query; cag = cache once):
 
@@ -174,9 +174,40 @@ then near-zero — the more questions per cached context, the bigger the win.
   answers (0.5B corpus 4–6/8; 1.5B 1/8) — decode totals would rise with a higher limit.
 - **KV size assumes f16** (2 B/elem, llama.cpp default). Using `-ctk/-ctv q8_0` halves the
   reported MB (runner currently prints the f16 figure).
-- **Disk save/restore CAG not benchmarked:** we used in-memory prefix reuse. The
-  "precompute the cache on a fast box, ship the KV blob, restore on the Pi" path
-  (`--slot-save-path`) would remove the cold prefill entirely and is the natural next step.
+- **Disk save/restore CAG not benchmarked** in the runner: we used in-memory prefix reuse.
+  *Update 2026-07-08: the save/restore path is now implemented and live-validated in the
+  example app (§8) — ingest saves the slot to disk, restart restores it and skips the
+  re-prefill.*
 - **Small quality sample:** one fiche / one cluster / a handful of questions per type;
   quality verdicts are indicative, not statistical.
+
+## 8. From benchmark to app (2026-07-08)
+
+The findings above were packaged into a shippable example app (`app/`): one Docker image
+(linux/amd64 + linux/arm64, Pi 4 = floor target) running llama-server + a FastAPI proxy,
+with **Qwen2.5-1.5B-Instruct Q4_K_M** baked in and **zero content data** — the user pastes
+their own document (≤12,000 tokens, over-cap rejected with the actual count), the app
+prefills it once, saves the KV slot to a `/data` volume (`--slot-save-path` +
+`POST /slots/0?action=save`), and **restores it on container restart** — no re-prefill.
+Multi-turn chat on top of the cached prefix, history budget = 16,384 − document − 1,024,
+oldest pairs dropped. Design spec: `superpowers/specs/2026-07-07-cag-app-design.md`;
+CI publishes `ghcr.io/pleias/cag-app` on `v*` tags.
+
+**New Pi 4 datapoint — Q4_K_M vs the Q8_0 used in the benchmark** (147-token document,
+live smoke suite, all grounding checks passed incl. French + a multi-turn follow-up):
+
+| quant (1.5B) | prefill tok/s | decode tok/s |
+|---|---:|---:|
+| Q8_0 (benchmark, §6) | ~38 | ~6.0 |
+| **Q4_K_M (app)** | **44–53** | **12.0** |
+
+Decode doubling under Q4 is the memory-bandwidth thesis confirmed from the other side:
+decode streams the weights every token, Q4 halves the bytes, throughput doubles. At
+~12 tok/s a typical 2–4 sentence answer lands in 3–6 s on a Pi 4 — single-lesson CAG
+tutoring is now comfortably interactive.
+
+**Operational gotcha worth recording:** recent llama-server builds default `--parallel`
+to `-1` (auto), which allocated **4 slots** → 4×16,384 unified KV → CPU decode scanned the
+whole 65k buffer every token → **0.36 tok/s** (~30× slowdown, observed on x86). Single-user
+CAG must pin `--parallel 1`; the app's entrypoint does.
 

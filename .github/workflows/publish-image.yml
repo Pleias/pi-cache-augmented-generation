@@ -1,0 +1,60 @@
+# Build the multi-arch CAG image and publish it to GHCR on every version tag.
+name: publish-image
+
+on:
+  push:
+    # Tags (v*) land on commits already on main, so no branch filter is needed —
+    # tag-push events are independent of branch filters and fire on the tag ref itself.
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read       # checkout
+  packages: write      # push to ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # QEMU provides the arm64 emulation used to build the linux/arm64 leg on an
+      # amd64 runner. That leg is slow under emulation; the first run is long. The
+      # ~1.12 GB model GGUF is NOT re-downloaded per platform: the model stage is
+      # pinned to $BUILDPLATFORM in the Dockerfile, so it is fetched once natively
+      # and COPY --from'd into both arch images (and cached via GHA across runs).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/cag-app
+          # v1.2.3 -> tags 1.2.3, 1.2, and latest (latest auto-added for
+          # non-prerelease semver tags; pre-releases are skipped for latest).
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: ./app
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
