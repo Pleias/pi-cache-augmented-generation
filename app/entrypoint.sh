@@ -44,9 +44,13 @@ echo "[entrypoint] model=$MODEL ctx=$CTX threads=$THREADS cache=$CACHE_DIR"
 
 # --slot-save-path enables the POST /slots/N?action=save|restore actions the app relies
 # on; --slots also exposes the GET /slots monitor endpoint. Both are cheap insurance.
+# --parallel 1 is CRITICAL: this build defaults to -np -1 (auto), which allocated 4 slots
+# = 4x16384 unified KV; CPU decode then scans the whole 65k buffer per token (~0.36 tok/s
+# observed on x86). The app is single-user on slot 0 by design — one slot, one 16k KV.
 "$LLAMA_BIN" \
   --model "$MODEL" \
   --ctx-size "$CTX" \
+  --parallel 1 \
   --threads "$THREADS" \
   --host "$LLAMA_HOST" --port "$LLAMA_PORT" \
   --slot-save-path "$CACHE_DIR" \
