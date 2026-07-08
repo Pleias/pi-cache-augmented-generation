@@ -40,10 +40,14 @@ The findings are packaged as a runnable app in [`app/`](app/): a single Docker i
 with the actual token count), the app prefills the KV cache **once**, saves it to your
 mounted volume, and **restores it on restart** (no re-prefill). Multi-turn chat streams
 over the cached prefix with a capped history budget; the **conversation itself persists
-too** (`history.json` next to the cache — replayed in the UI after a restart, its KV
-re-prefilled as a small tail on the restored prefix). Container usage doc
-([`app/CONTAINER.md`](app/CONTAINER.md)) is baked into the image and served in-app via
-the header's **Docs** button (`GET /api/doc`).
+too** (per-doc `history.json` — replayed in the UI after a restart, its KV re-prefilled
+as a small tail on the restored prefix). Since v0.2: a **document library** (≤20 docs,
+per-doc slot files under `cache/<id>.bin`, switch = restore in seconds, idempotent legacy
+migration), **guided-mode preset chips**, **content packs** (validated tar export/import
++ wipe; `PACK_MAX_BYTES` guard, TMPDIR pinned to `/data/tmp`), and an **EN/FR/AR UI**
+(RTL; FR default — see `docs/I18N_PLAN.md` for why mother tongues aren't viable at 1.5B).
+Container usage doc ([`app/CONTAINER.md`](app/CONTAINER.md)) is baked into the image and
+served in-app via the header's **Docs** button (`GET /api/doc`).
 
 ```bash
 # build (or pull ghcr.io/pleias/cag-app once published — CI builds on v* tags)

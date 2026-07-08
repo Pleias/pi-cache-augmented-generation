@@ -44,11 +44,21 @@ uv run bench/cag_bench.py --tokens-only
 - **`--parallel 1` on llama-server is mandatory** for single-user CAG. Recent builds
   default to auto = 4 slots → 4× unified KV → CPU decode collapses ~30× (measured
   0.36 tok/s). Set in `app/entrypoint.sh`.
-- **Layered persistence in `/data`:** `cache/slot0.bin` = document KV only, saved once at
-  ingest (never per-turn — ~300 MB SD writes); `fiche.txt` + `meta.json` = document;
-  `history.json` = conversation (atomic write per completed turn, cached per-pair token
-  counts). Restart: restore slot → replay history in UI → first ask re-prefills only the
-  history tail. Model change ⇒ drop history (stale tokenizer counts).
+- **Layered persistence in `/data` (library layout):** `library.json` = atomic index +
+  active id; per document `docs/<id>/` (`fiche.txt`, `meta.json`, `history.json`) +
+  `cache/<id>.bin` = that document's KV slot, saved once at its ingest (never per-turn —
+  ~300 MB SD writes). Max 20 docs. Switching docs = slot-file restore (seconds). Legacy
+  single-doc volumes migrate on startup (idempotent, crash-recovered). Restart: restore
+  active slot → replay its history in UI → first ask re-prefills only the history tail.
+  Model change ⇒ drop history (stale tokenizer counts).
+- **Content packs:** export streams a tar (small files snapshotted under lock, slots
+  appended lock-free); import is guarded (traversal/symlink rejection, PACK_MAX_BYTES,
+  running extracted-bytes cap, free-space precheck, rollback). TMPDIR pinned to
+  `/data/tmp` in entrypoint (never tmpfs on a 4 GB Pi).
+- **UI languages: EN base + FR + AR (RTL)** — `T` table in index.html, error-code →
+  localized message map, FR default. Adding a string = adding it in all three languages.
+  es/pt were considered and cut (see `docs/I18N_PLAN.md`); target-region mother tongues
+  (Wolof/Hausa/Swahili) are unviable at 1.5B — French is the bridge.
 - **Single slot 0 + `asyncio.Lock`**: every MUTATING endpoint (/ask, /ingest, /reset,
   /switch, delete, pack import, wipe) takes `_slot_lock`. Read-only endpoints
   (/status, /library, /history) are deliberately lock-free — state files are written

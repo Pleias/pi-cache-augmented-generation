@@ -215,7 +215,11 @@ CAG must pin `--parallel 1`; the app's entrypoint does.
 the *document prefix* (saved once at ingest — re-saving a ~300 MB slot after every answer
 would grind the Pi's SD card). The *conversation* is the source of truth in app state and
 is persisted separately as a small `history.json` (atomic write per completed turn, with
-cached per-pair token counts). On restart: slot restore brings back the document KV in
+cached per-pair token counts). This generalizes to a **document library** (v0.2): one
+slot file + one history per document, one slot live in RAM, switching = disk restore in
+seconds — the slot save/restore mechanic turns out to be the enabler for multi-document
+UX, validated content-pack distribution (tar of docs+slots for USB fleet seeding), and
+an EN/FR/AR interface. On restart: slot restore brings back the document KV in
 seconds, the UI replays the conversation instantly, and the first ask re-prefills just the
 history tail on top of the restored prefix. Aborted answers are never committed — absent
 from history, disk, and the next prompt alike. A model change invalidates the persisted

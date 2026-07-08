@@ -51,17 +51,27 @@ docker run -d --name cag -p 8000:8000 -v "$HOME/cag-data:/data" \
 
 Open http://localhost:8000 and:
 
-1. **Ingest** — paste your document (≤ 12,000 tokens; over the cap it is rejected with
-   the actual token count and an explanation). The app prefills the KV cache once and
-   saves it to your mounted volume.
+1. **Ingest** — paste a document (≤ 12,000 tokens; over the cap it is rejected with the
+   actual token count and an explanation). The app prefills the KV cache once and saves
+   it to your mounted volume.
 2. **Ask** — chat about the document, answers stream in, grounded in the text. Multi-turn:
-   follow-ups keep their context, with an automatically capped history budget.
+   follow-ups keep their context, with an automatically capped history budget. One-tap
+   **guided modes** (*Quiz me · Explain simpler · Make 5 exercises · Summarize*) work in
+   the document's own language.
 3. **Restart-restore** — restart the container and the cache is restored from the volume
    in seconds (no re-prefill), the conversation is replayed, and follow-ups continue
    where they left off.
 
-Everything persistent lives in your mounted `/data` directory: the document, the saved
-KV cache, and the conversation. The image is stateless; nothing leaves the device.
+It keeps a **library** of up to 20 documents — each with its own saved cache and its own
+conversation — and switching documents restores the cached one in seconds instead of a
+minutes-long re-prefill. A prepared library can be **exported as a single pack file** and
+imported on another device (USB-stick distribution to offline sites; imports are strictly
+validated), and a **wipe** control erases everything for privacy. The interface speaks
+**English, French, and Arabic** (right-to-left supported); answers follow the language of
+the question.
+
+Everything persistent lives in your mounted `/data` directory: the documents, the saved
+KV caches, and the conversations. The image is stateless; nothing leaves the device.
 Built-in documentation is available behind the **Docs** button in the app header, or:
 
 ```bash
